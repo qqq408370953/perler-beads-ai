@@ -11,8 +11,10 @@
     "pages:deploy": "npx wrangler pages deploy out"
   },
   "dependencies": {
-    "cropperjs": "^2.1.0",
+    "@imgly/background-removal": "^1.7.0",
+    "cropperjs": "1.6.2",
     "next": "15.3.6",
+    "onnxruntime-web": "^1.21.0",
     "react": "^19.0.0",
     "react-cropper": "^2.3.3",
     "react-dom": "^19.0.0"

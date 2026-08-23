@@ -178,7 +178,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
     // 鼠标点击行为保持不变：
     // 手动模式下：上色
     // 非手动模式下：切换tooltip
-    onInteraction(event.clientX, event.clientY, event.pageX, event.pageY, isManualColoringMode);
+    onInteraction(event.clientX, event.clientY, event.pageX, event.pageY, true);
   };
 
   // --- 触摸事件处理 ---
@@ -223,13 +223,11 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
   // 触摸结束时不再自动隐藏提示框
   const handleTouchEnd = () => {
     // 检查是否是手动模式，并且触摸没有移动（判定为点击）
-    if (isManualColoringMode && !touchMovedRef.current && touchStartPosRef.current) {
+    if (!touchMovedRef.current && touchStartPosRef.current) {
       // 使用触摸开始时的坐标来执行上色操作
       const { x, y, pageX, pageY } = touchStartPosRef.current;
-      onInteraction(x, y, pageX, pageY, true); // isClick: true 表示执行上色
+      onInteraction(x, y, pageX, pageY, true); // isClick: true 表示执行上色或打开色块操作
     }
-    // 如果是非手动模式下的点击 (isManualColoringMode=false, touchMovedRef=false)
-    // Tooltip 的显示/隐藏切换已在 touchstart 处理，touchend 时无需额外操作
 
     // 重置触摸状态
     touchStartPosRef.current = null;
@@ -257,4 +255,4 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
   );
 };
 
-export default PixelatedPreviewCanvas; 
+export default PixelatedPreviewCanvas;

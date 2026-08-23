@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @next/next/no-img-element */
+
 import React, { useState, useRef, ChangeEvent, DragEvent, useEffect, useMemo, useCallback } from 'react';
 import Script from 'next/script';
 import InstallPWA from '../components/InstallPWA';
@@ -19,7 +21,7 @@ import {
 // 导入新的类型和组件
 import { GridDownloadOptions } from '../types/downloadTypes';
 import DownloadSettingsModal, { gridLineColorOptions } from '../components/DownloadSettingsModal';
-import { downloadImage, importCsvData } from '../utils/imageDownloader';
+import { downloadImage, generateDownloadImagePreview, importCsvData } from '../utils/imageDownloader';
 
 import { 
   colorSystemOptions, 
@@ -101,10 +103,12 @@ import AIOptimizeModal from '../components/AIOptimizeModal';
 
 export default function Home() {
   const [originalImageSrc, setOriginalImageSrc] = useState<string | null>(null);
-  const [granularity, setGranularity] = useState<number>(50);
-  const [granularityInput, setGranularityInput] = useState<string>("50");
-  const [similarityThreshold, setSimilarityThreshold] = useState<number>(30);
-  const [similarityThresholdInput, setSimilarityThresholdInput] = useState<string>("30");
+  const [granularity, setGranularity] = useState<number>(70);
+  const [granularityInput, setGranularityInput] = useState<string>("70");
+  const [similarityThreshold, setSimilarityThreshold] = useState<number>(12);
+  const [similarityThresholdInput, setSimilarityThresholdInput] = useState<string>("12");
+  const [maxColorCount, setMaxColorCount] = useState<number>(8);
+  const [maxColorCountInput, setMaxColorCountInput] = useState<string>("8");
   // 添加像素化模式状态
   const [pixelationMode, setPixelationMode] = useState<PixelationMode>(PixelationMode.Dominant); // 默认为卡通模式
   
@@ -126,6 +130,14 @@ export default function Home() {
   const [colorCounts, setColorCounts] = useState<{ [key: string]: { count: number; color: string } } | null>(null);
   const [totalBeadCount, setTotalBeadCount] = useState<number>(0);
   const [tooltipData, setTooltipData] = useState<{ x: number, y: number, key: string, color: string } | null>(null);
+  const [selectedCellAction, setSelectedCellAction] = useState<{
+    row: number;
+    col: number;
+    x: number;
+    y: number;
+    key: string;
+    color: string;
+  } | null>(null);
   const [remapTrigger, setRemapTrigger] = useState<number>(0);
   const [isManualColoringMode, setIsManualColoringMode] = useState<boolean>(false);
   const [selectedColor, setSelectedColor] = useState<MappedPixel | null>(null);
@@ -150,6 +162,10 @@ export default function Home() {
     includeStats: true, // 默认包含统计信息
     exportCsv: false // 默认不导出CSV
   });
+  const [isPatternPreviewOpen, setIsPatternPreviewOpen] = useState<boolean>(false);
+  const [patternPreviewSrc, setPatternPreviewSrc] = useState<string | null>(null);
+  const [patternPreviewFilename, setPatternPreviewFilename] = useState<string>('bead-pattern-preview.png');
+  const [isGeneratingPatternPreview, setIsGeneratingPatternPreview] = useState<boolean>(false);
 
   // 新增：高亮相关状态
   const [highlightColorKey, setHighlightColorKey] = useState<string | null>(null);
@@ -642,7 +658,7 @@ export default function Home() {
     setTotalBeadCount(0);
     setInitialGridColorKeys(new Set()); // ++ 重置初始键 ++
     // ++ 重置横轴格子数量为默认值 ++
-    const defaultGranularity = 60;
+    const defaultGranularity = 70;
     setGranularity(defaultGranularity);
     setGranularityInput(defaultGranularity.toString());
     setRemapTrigger(prev => prev + 1); // Trigger full remap for new image
@@ -729,7 +745,11 @@ export default function Home() {
     setSimilarityThresholdInput(event.target.value);
   };
 
-  // ++ 修改：处理确认按钮点击的函数，同时处理两个参数 ++
+  const handleMaxColorCountInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setMaxColorCountInput(event.target.value);
+  };
+
+  // ++ 修改：处理确认按钮点击的函数，同时处理三个参数 ++
   const handleConfirmParameters = () => {
     // 处理格子数
     const minGranularity = 10;
@@ -753,9 +773,21 @@ export default function Home() {
       newSimilarity = maxSimilarity;
     }
 
+    // 处理最终颜色数量上限
+    const minMaxColorCount = 1;
+    const maxMaxColorCount = 128;
+    let newMaxColorCount = parseInt(maxColorCountInput, 10);
+
+    if (isNaN(newMaxColorCount) || newMaxColorCount < minMaxColorCount) {
+      newMaxColorCount = minMaxColorCount;
+    } else if (newMaxColorCount > maxMaxColorCount) {
+      newMaxColorCount = maxMaxColorCount;
+    }
+
     // 检查值是否有变化
     const granularityChanged = newGranularity !== granularity;
     const similarityChanged = newSimilarity !== similarityThreshold;
+    const maxColorCountChanged = newMaxColorCount !== maxColorCount;
     
     if (granularityChanged) {
       console.log(`Confirming new granularity: ${newGranularity}`);
@@ -766,9 +798,14 @@ export default function Home() {
       console.log(`Confirming new similarity threshold: ${newSimilarity}`);
       setSimilarityThreshold(newSimilarity);
     }
+
+    if (maxColorCountChanged) {
+      console.log(`Confirming max color count: ${newMaxColorCount}`);
+      setMaxColorCount(newMaxColorCount);
+    }
     
     // 只有在有值变化时才触发重映射
-    if (granularityChanged || similarityChanged) {
+    if (granularityChanged || similarityChanged || maxColorCountChanged) {
       setRemapTrigger(prev => prev + 1);
       // 退出手动上色模式
       setIsManualColoringMode(false);
@@ -778,6 +815,7 @@ export default function Home() {
     // 始终同步输入框的值
     setGranularityInput(newGranularity.toString());
     setSimilarityThresholdInput(newSimilarity.toString());
+    setMaxColorCountInput(newMaxColorCount.toString());
   };
 
   // 添加像素化模式切换处理函数
@@ -794,8 +832,8 @@ export default function Home() {
   };
 
   // 修改pixelateImage函数接收模式参数
-  const pixelateImage = (imageSrc: string, detailLevel: number, threshold: number, currentPalette: PaletteColor[], mode: PixelationMode) => {
-    console.log(`Attempting to pixelate with detail: ${detailLevel}, threshold: ${threshold}, mode: ${mode}`);
+  const pixelateImage = (imageSrc: string, detailLevel: number, threshold: number, currentPalette: PaletteColor[], mode: PixelationMode, finalMaxColorCount: number) => {
+    console.log(`Attempting to pixelate with detail: ${detailLevel}, threshold: ${threshold}, mode: ${mode}, max colors: ${finalMaxColorCount}`);
     const originalCanvas = originalCanvasRef.current;
     const pixelatedCanvas = pixelatedCanvasRef.current;
 
@@ -992,14 +1030,74 @@ export default function Home() {
       }
       // --- 结束新的全局颜色合并逻辑 ---
 
+      const limitedData: MappedPixel[][] = mergedData.map(row => row.map(cell => ({ ...cell })));
+
+      if (finalMaxColorCount > 0) {
+        const mergedColorCounts: { [key: string]: number } = {};
+        limitedData.flat().forEach(cell => {
+          if (cell && cell.key && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
+            mergedColorCounts[cell.key] = (mergedColorCounts[cell.key] || 0) + 1;
+          }
+        });
+
+        const colorsAfterMerge = Object.entries(mergedColorCounts)
+          .sort((a, b) => b[1] - a[1])
+          .map(([key]) => key);
+
+        if (colorsAfterMerge.length > finalMaxColorCount) {
+          const keptColorKeys = colorsAfterMerge.slice(0, finalMaxColorCount);
+          const keptColorSet = new Set(keptColorKeys);
+          let remappedForLimit = 0;
+
+          for (let r = 0; r < M; r++) {
+            for (let c = 0; c < N; c++) {
+              const cell = limitedData[r][c];
+              if (!cell || cell.isExternal || cell.key === TRANSPARENT_KEY || keptColorSet.has(cell.key)) {
+                continue;
+              }
+
+              const sourceRgb = keyToRgbMap.get(cell.key);
+              if (!sourceRgb) continue;
+
+              let closestKey = keptColorKeys[0];
+              let minDistance = Infinity;
+
+              keptColorKeys.forEach(keptKey => {
+                const keptRgb = keyToRgbMap.get(keptKey);
+                if (!keptRgb) return;
+                const distance = colorDistance(sourceRgb, keptRgb);
+                if (distance < minDistance) {
+                  minDistance = distance;
+                  closestKey = keptKey;
+                }
+              });
+
+              const closestColorData = keyToColorDataMap.get(closestKey);
+              if (closestColorData) {
+                limitedData[r][c] = {
+                  key: closestKey,
+                  color: closestColorData.hex,
+                  isExternal: false
+                };
+                remappedForLimit++;
+              }
+            }
+          }
+
+          console.log(`Limited final colors from ${colorsAfterMerge.length} to ${finalMaxColorCount}. Remapped ${remappedForLimit} cells.`);
+        } else {
+          console.log(`Final color count ${colorsAfterMerge.length} is within limit ${finalMaxColorCount}.`);
+        }
+      }
+
       // --- 绘制和状态更新 ---
       if (pixelatedCanvasRef.current) {
-        setMappedPixelData(mergedData);
+        setMappedPixelData(limitedData);
         setGridDimensions({ N, M });
 
         const counts: { [key: string]: { count: number; color: string } } = {};
         let totalCount = 0;
-        mergedData.flat().forEach(cell => {
+        limitedData.flat().forEach(cell => {
           if (cell && cell.key && !cell.isExternal) {
             // 使用hex值作为统计键值，而不是色号
             const hexKey = cell.color;
@@ -1033,7 +1131,7 @@ export default function Home() {
        const timeoutId = setTimeout(() => {
          if (originalImageSrc && originalCanvasRef.current && pixelatedCanvasRef.current && activeBeadPalette.length > 0) {
            console.log("useEffect triggered: Processing image due to src, granularity, threshold, palette selection, mode or remap trigger.");
-           pixelateImage(originalImageSrc, granularity, similarityThreshold, activeBeadPalette, pixelationMode);
+           pixelateImage(originalImageSrc, granularity, similarityThreshold, activeBeadPalette, pixelationMode, maxColorCount);
          } else {
             console.warn("useEffect check failed inside timeout: Refs or active palette not ready/empty.");
          }
@@ -1058,7 +1156,7 @@ export default function Home() {
         // setTotalBeadCount(0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [originalImageSrc, granularity, similarityThreshold, customPaletteSelections, pixelationMode, remapTrigger]);
+  }, [originalImageSrc, granularity, similarityThreshold, maxColorCount, customPaletteSelections, pixelationMode, remapTrigger]);
 
   // 确保文件输入框引用在组件挂载后正确设置
   useEffect(() => {
@@ -1136,6 +1234,39 @@ export default function Home() {
           activeBeadPalette,
           selectedColorSystem
         });
+    };
+
+    const handlePatternPreviewRequest = async () => {
+        setIsGeneratingPatternPreview(true);
+        try {
+          const preview = await generateDownloadImagePreview({
+            mappedPixelData,
+            gridDimensions,
+            colorCounts,
+            totalBeadCount,
+            options: downloadOptions,
+            activeBeadPalette,
+            selectedColorSystem
+          });
+
+          if (preview) {
+            setPatternPreviewSrc(preview.dataURL);
+            setPatternPreviewFilename(preview.filename);
+            setIsPatternPreviewOpen(true);
+          }
+        } finally {
+          setIsGeneratingPatternPreview(false);
+        }
+    };
+
+    const handleDownloadPatternPreview = () => {
+      if (!patternPreviewSrc) return;
+      const link = document.createElement('a');
+      link.download = patternPreviewFilename;
+      link.href = patternPreviewSrc;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     };
 
     // --- Handler to toggle color exclusion ---
@@ -1372,6 +1503,61 @@ export default function Home() {
 
   // --- Canvas Interaction ---
 
+  const updatePixelDataAndCounts = (newPixelData: MappedPixel[][]) => {
+    setMappedPixelData(newPixelData);
+
+    const newColorCounts: { [hexKey: string]: { count: number; color: string } } = {};
+    let newTotalCount = 0;
+
+    newPixelData.flat().forEach(cell => {
+      if (cell && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
+        const cellHex = cell.color.toUpperCase();
+        if (!newColorCounts[cellHex]) {
+          newColorCounts[cellHex] = {
+            count: 0,
+            color: cellHex
+          };
+        }
+        newColorCounts[cellHex].count++;
+        newTotalCount++;
+      }
+    });
+
+    setColorCounts(newColorCounts);
+    setTotalBeadCount(newTotalCount);
+    setInitialGridColorKeys(new Set(Object.keys(newColorCounts)));
+  };
+
+  const handleDeleteSelectedCell = () => {
+    if (!selectedCellAction || !mappedPixelData) return;
+    const { row, col } = selectedCellAction;
+    const newPixelData = mappedPixelData.map(rowData => rowData.map(cell => ({ ...cell })));
+
+    if (!newPixelData[row]?.[col]) return;
+
+    newPixelData[row][col] = { ...transparentColorData };
+    updatePixelDataAndCounts(newPixelData);
+    setSelectedCellAction(null);
+    setTooltipData(null);
+  };
+
+  const handleDeleteSelectedColor = () => {
+    if (!selectedCellAction || !mappedPixelData) return;
+    const targetColor = selectedCellAction.color.toUpperCase();
+    const newPixelData = mappedPixelData.map(rowData =>
+      rowData.map(cell => {
+        if (cell && !cell.isExternal && cell.color.toUpperCase() === targetColor) {
+          return { ...transparentColorData };
+        }
+        return { ...cell };
+      })
+    );
+
+    updatePixelDataAndCounts(newPixelData);
+    setSelectedCellAction(null);
+    setTooltipData(null);
+  };
+
   // 洪水填充擦除函数
   const floodFillErase = (startRow: number, startCol: number, targetKey: string) => {
     if (!mappedPixelData || !gridDimensions) return;
@@ -1569,6 +1755,24 @@ export default function Home() {
       else if (!isManualColoringMode) {
         // 只有单元格实际有内容（非背景/外部区域）才会显示提示
         if (cellData && !cellData.isExternal && cellData.key) {
+          const mainElement = mainRef.current;
+          const mainRect = mainElement?.getBoundingClientRect();
+          const relativeX = mainRect ? pageX - mainRect.left - window.scrollX : pageX;
+          const relativeY = mainRect ? pageY - mainRect.top - window.scrollY : pageY;
+
+          if (isClick) {
+            setSelectedCellAction({
+              row: j,
+              col: i,
+              x: relativeX,
+              y: relativeY,
+              key: cellData.key,
+              color: cellData.color,
+            });
+            setTooltipData(null);
+            return;
+          }
+
           // 检查是否已经显示了提示框，并且是否点击的是同一个位置
           // 对于移动设备，位置可能有细微偏差，所以我们检查单元格索引而不是具体坐标
           if (tooltipData) {
@@ -1595,13 +1799,7 @@ export default function Home() {
           }
           
           // 计算相对于main元素的位置
-          const mainElement = mainRef.current;
           if (mainElement) {
-            const mainRect = mainElement.getBoundingClientRect();
-            // 计算相对于main元素的坐标
-            const relativeX = pageX - mainRect.left - window.scrollX;
-            const relativeY = pageY - mainRect.top - window.scrollY;
-            
             // 如果是移动/悬停到一个新的有效格子，或者点击了不同的格子，则显示提示
             setTooltipData({
               x: relativeX,
@@ -1621,11 +1819,17 @@ export default function Home() {
         } else {
           // 如果点击/悬停在外部区域或背景上，隐藏提示
           setTooltipData(null);
+          if (isClick) {
+            setSelectedCellAction(null);
+          }
         }
       }
     } else {
       // 如果点击/悬停在画布外部，隐藏提示
       setTooltipData(null);
+      if (isClick) {
+        setSelectedCellAction(null);
+      }
     }
   };
 
@@ -1995,10 +2199,10 @@ export default function Home() {
 
             {/* Ultra fancy brand name and tool name with hyper cute decorations */}
             <div className="relative flex flex-col items-center space-y-3">
-              {/* Brand name - LDB with ultra fancy effects */}
+              {/* Tool name with decorative effects */}
               <div className="relative">
                 <h1 className="relative text-4xl sm:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-500 via-purple-500 via-blue-500 to-cyan-400 tracking-wider drop-shadow-2xl transform hover:scale-105 transition-transform duration-300 animate-bounce">
-                  LDB
+                  拼豆AI生成
                 </h1>
                 
                 {/* Super fancy geometric decorations */}
@@ -2018,10 +2222,10 @@ export default function Home() {
                 <div className="absolute bottom-1 right-0 w-1 h-1 bg-purple-300 rounded-full animate-pulse delay-1000"></div>
               </div>
               
-              {/* Tool name - 拼豆底稿生成器 with hyper cute style */}
+              {/* Tool description */}
               <div className="relative">
                 <h2 className="relative text-xl sm:text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-500 via-teal-500 via-green-500 to-emerald-400 tracking-widest transform hover:scale-102 transition-all duration-300">
-                  拼豆AI生成
+                  图片一键变图纸
                 </h2>
                 
                 {/* Super cute geometric shapes */}
@@ -2122,7 +2326,7 @@ export default function Home() {
             {/* ++ HIDE Control Row in manual mode ++ */}
             {!isManualColoringMode && (
               /* 修改控制面板网格布局 */
-              <div className="w-full md:max-w-2xl grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white dark:bg-gray-800 p-4 sm:p-5 rounded-xl shadow-md border border-gray-100 dark:border-gray-700">
+              <div className="w-full md:max-w-2xl grid grid-cols-1 sm:grid-cols-3 gap-4 bg-white dark:bg-gray-800 p-4 sm:p-5 rounded-xl shadow-md border border-gray-100 dark:border-gray-700">
                 {/* Granularity Input */}
                 <div className="flex-1">
                   {/* Label color */}
@@ -2163,8 +2367,26 @@ export default function Home() {
                     </div>
                 </div>
 
+                {/* Max Color Count Input */}
+                <div className="flex-1">
+                    <label htmlFor="maxColorCountInput" className="block text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 sm:mb-2">
+                        最终颜色数量上限 (1-128):
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        id="maxColorCountInput"
+                        value={maxColorCountInput}
+                        onChange={handleMaxColorCountInputChange}
+                        className="w-full p-1.5 border border-gray-300 dark:border-gray-600 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500 h-9 shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500"
+                        min="1"
+                        max="128"
+                      />
+                    </div>
+                </div>
+
                 {/* 快捷按钮 */}
-                <div className="sm:col-span-2 flex flex-wrap items-center gap-2">
+                <div className="sm:col-span-3 flex flex-wrap items-center gap-2">
                   <button
                     onClick={handleConfirmParameters}
                     className="h-9 bg-blue-500 hover:bg-blue-600 text-white text-sm px-3 rounded-md whitespace-nowrap transition-colors duration-200 shadow-sm"
@@ -2537,8 +2759,25 @@ export default function Home() {
 
         {/* ++ HIDE Download Buttons in manual mode ++ */}
         {!isManualColoringMode && originalImageSrc && mappedPixelData && (
-            <div className="w-full md:max-w-2xl mt-4">
-              {/* 使用一个大按钮，现在所有的下载设置都通过弹窗控制 */}
+            <div className="w-full md:max-w-2xl mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                onClick={handlePatternPreviewRequest}
+                disabled={!mappedPixelData || !gridDimensions || gridDimensions.N === 0 || gridDimensions.M === 0 || activeBeadPalette.length === 0 || isGeneratingPatternPreview}
+                className="w-full py-2.5 px-4 bg-gradient-to-r from-cyan-500 to-sky-600 text-white text-sm sm:text-base rounded-lg hover:from-cyan-600 hover:to-sky-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 transition-all duration-300 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg hover:translate-y-[-1px] disabled:hover:translate-y-0 disabled:hover:shadow-md"
+               >
+                {isGeneratingPatternPreview ? (
+                  <svg className="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12 18 18.75 12 18.75 2.25 12 2.25 12z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                )}
+                {isGeneratingPatternPreview ? '生成预览中...' : '预览图纸效果'}
+              </button>
               <button
                 onClick={() => setIsDownloadSettingsOpen(true)}
                 disabled={!mappedPixelData || !gridDimensions || gridDimensions.N === 0 || gridDimensions.M === 0 || activeBeadPalette.length === 0}
@@ -2550,10 +2789,55 @@ export default function Home() {
             </div>
         )} {/* ++ End of HIDE Download Buttons ++ */}
 
+         {selectedCellAction && !isManualColoringMode && (
+            <div className="fixed inset-x-3 bottom-4 z-40 mx-auto max-w-sm rounded-xl border border-gray-200 bg-white p-4 shadow-2xl dark:border-gray-700 dark:bg-gray-900">
+              <div className="flex items-start gap-3">
+                <div
+                  className="h-11 w-11 shrink-0 rounded-lg border border-gray-200 shadow-inner dark:border-gray-700"
+                  style={{ backgroundColor: selectedCellAction.color }}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    {getColorKeyByHex(selectedCellAction.color, selectedColorSystem)}
+                  </div>
+                  <div className="mt-0.5 break-all text-xs text-gray-500 dark:text-gray-400">
+                    {selectedCellAction.color.toUpperCase()}
+                  </div>
+                  <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    第 {selectedCellAction.row + 1} 行，第 {selectedCellAction.col + 1} 列
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedCellAction(null)}
+                  className="rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  aria-label="关闭色块操作"
+                >
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  onClick={handleDeleteSelectedCell}
+                  className="rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-950/40"
+                >
+                  删除当前格
+                </button>
+                <button
+                  onClick={handleDeleteSelectedColor}
+                  className="rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700"
+                >
+                  删除同色全部
+                </button>
+              </div>
+            </div>
+         )}
+
          {/* Tooltip Display (Needs update in GridTooltip.tsx) */}
          {tooltipData && (
             <GridTooltip tooltipData={tooltipData} selectedColorSystem={selectedColorSystem} />
-          )}
+         )}
 
       </main>
 
@@ -2668,7 +2952,7 @@ export default function Home() {
 
         {/* Copyright text color */}
         <p className="font-medium text-gray-600 dark:text-gray-300">
-          LDB 拼豆底稿生成器 &copy; {new Date().getFullYear()}
+          拼豆图纸生成器 &copy; {new Date().getFullYear()}
         </p>
       </footer>
 
@@ -2752,6 +3036,49 @@ export default function Home() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
                 我知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isPatternPreviewOpen && patternPreviewSrc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm sm:p-4">
+          <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-gray-900">
+            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700 sm:px-6">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">图纸效果预览</h3>
+                <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">当前下载设置生成的最终图纸效果</p>
+              </div>
+              <button
+                onClick={() => setIsPatternPreviewOpen(false)}
+                className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                aria-label="关闭预览"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto bg-gray-100 p-3 dark:bg-gray-950 sm:p-5">
+              <img
+                src={patternPreviewSrc}
+                alt="图纸效果预览"
+                className="mx-auto h-auto max-w-full rounded-lg bg-white shadow-lg"
+              />
+            </div>
+            <div className="flex flex-col gap-2 border-t border-gray-200 px-4 py-3 dark:border-gray-700 sm:flex-row sm:justify-end sm:px-6">
+              <button
+                onClick={() => setIsPatternPreviewOpen(false)}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                关闭
+              </button>
+              <button
+                onClick={handleDownloadPatternPreview}
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-green-700"
+              >
+                下载当前预览
               </button>
             </div>
           </div>
