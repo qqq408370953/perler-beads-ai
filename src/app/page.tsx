@@ -85,7 +85,7 @@ const fullBeadPalette: PaletteColor[] = Object.entries(mardToHexMapping)
 // ++ Add definition for background color keys ++
 
 // 1. 导入新组件
-import PixelatedPreviewCanvas from '../components/PixelatedPreviewCanvas';
+import PixelatedPreviewCanvas, { RegionSelectionCell, RegionSelectionMode } from '../components/PixelatedPreviewCanvas';
 import GridTooltip from '../components/GridTooltip';
 import CustomPaletteEditor from '../components/CustomPaletteEditor';
 import FloatingColorPalette from '../components/FloatingColorPalette';
@@ -138,6 +138,8 @@ export default function Home() {
     key: string;
     color: string;
   } | null>(null);
+  const [regionSelectionMode, setRegionSelectionMode] = useState<RegionSelectionMode>('none');
+  const [selectedRegionCells, setSelectedRegionCells] = useState<RegionSelectionCell[]>([]);
   const [remapTrigger, setRemapTrigger] = useState<number>(0);
   const [isManualColoringMode, setIsManualColoringMode] = useState<boolean>(false);
   const [selectedColor, setSelectedColor] = useState<MappedPixel | null>(null);
@@ -1558,6 +1560,55 @@ export default function Home() {
     setTooltipData(null);
   };
 
+  const resetRegionSelection = () => {
+    setRegionSelectionMode('none');
+    setSelectedRegionCells([]);
+  };
+
+  const handleRegionSelectionModeChange = (mode: RegionSelectionMode) => {
+    setRegionSelectionMode(prevMode => {
+      const nextMode = prevMode === mode ? 'none' : mode;
+      setSelectedRegionCells([]);
+      setSelectedCellAction(null);
+      setTooltipData(null);
+      setIsEraseMode(false);
+      setColorReplaceState({
+        isActive: false,
+        step: 'select-source',
+      });
+      return nextMode;
+    });
+  };
+
+  const handleRegionSelectionComplete = (cells: RegionSelectionCell[]) => {
+    setSelectedRegionCells(cells);
+    setSelectedCellAction(null);
+    setTooltipData(null);
+  };
+
+  const handleDeleteSelectedRegionCells = () => {
+    if (!mappedPixelData || selectedRegionCells.length === 0) return;
+
+    const newPixelData = mappedPixelData.map(rowData => rowData.map(cell => ({ ...cell })));
+    let changed = false;
+
+    selectedRegionCells.forEach(({ row, col }) => {
+      const cell = newPixelData[row]?.[col];
+      if (cell && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
+        newPixelData[row][col] = { ...transparentColorData };
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      updatePixelDataAndCounts(newPixelData);
+    }
+
+    resetRegionSelection();
+    setTooltipData(null);
+    setSelectedCellAction(null);
+  };
+
   // 洪水填充擦除函数
   const floodFillErase = (startRow: number, startCol: number, targetKey: string) => {
     if (!mappedPixelData || !gridDimensions) return;
@@ -1637,6 +1688,11 @@ export default function Home() {
   ) => {
     // 如果是触摸结束或鼠标离开事件，隐藏提示
     if (isTouchEnd) {
+      setTooltipData(null);
+      return;
+    }
+
+    if (regionSelectionMode !== 'none') {
       setTooltipData(null);
       return;
     }
@@ -2567,6 +2623,9 @@ export default function Home() {
                     onInteraction={handleCanvasInteraction}
                     highlightColorKey={highlightColorKey}
                     onHighlightComplete={handleHighlightComplete}
+                    selectionMode={regionSelectionMode}
+                    selectedRegionCells={selectedRegionCells}
+                    onRegionSelectionComplete={handleRegionSelectionComplete}
                   />
                 </div>
               </div>
@@ -2736,6 +2795,7 @@ export default function Home() {
                   setIsManualColoringMode(true); // Enter mode
                   setSelectedColor(null);
                   setTooltipData(null);
+                  resetRegionSelection();
                 }}
                 className={`w-full py-2.5 px-4 text-sm sm:text-base rounded-lg transition-all duration-300 flex items-center justify-center gap-2 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-md hover:shadow-lg hover:translate-y-[-1px]`}
               >
@@ -2743,9 +2803,58 @@ export default function Home() {
                  进入手动编辑模式
              </button>
 
+             <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                 <div>
+                   <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">区域删除</div>
+                   <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                     选择工具后，在图纸上拖动框选或圈选色块，移动端可直接用手指拖动
+                   </div>
+                 </div>
+                 <div className="grid grid-cols-2 gap-2 sm:flex sm:shrink-0">
+                   <button
+                     onClick={() => handleRegionSelectionModeChange('rectangle')}
+                     className={`min-h-11 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${
+                       regionSelectionMode === 'rectangle'
+                         ? 'bg-red-600 text-white shadow-sm'
+                         : 'border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600'
+                     }`}
+                   >
+                     框选删除
+                   </button>
+                   <button
+                     onClick={() => handleRegionSelectionModeChange('lasso')}
+                     className={`min-h-11 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${
+                       regionSelectionMode === 'lasso'
+                         ? 'bg-red-600 text-white shadow-sm'
+                         : 'border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600'
+                     }`}
+                   >
+                     圈选删除
+                   </button>
+                 </div>
+               </div>
+               {regionSelectionMode !== 'none' && (
+                 <div className="mt-3 flex flex-col gap-3 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-200 sm:flex-row sm:items-center sm:justify-between">
+                   <span>
+                     当前为{regionSelectionMode === 'rectangle' ? '框选' : '圈选'}模式，选中色块后再确认删除
+                   </span>
+                   <button
+                     onClick={resetRegionSelection}
+                     className="min-h-10 rounded-md border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 dark:border-red-900/60 dark:bg-gray-900 dark:text-red-300 dark:hover:bg-red-950/50"
+                   >
+                     退出选择
+                   </button>
+                 </div>
+               )}
+             </div>
+
              {/* Focus Mode Button */}
              <button
-                onClick={handleEnterFocusMode}
+                onClick={() => {
+                  resetRegionSelection();
+                  handleEnterFocusMode();
+                }}
                 className={`w-full py-2.5 px-4 text-sm sm:text-base rounded-lg transition-all duration-300 flex items-center justify-center gap-2 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg hover:translate-y-[-1px]`}
               >
                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2788,6 +2897,47 @@ export default function Home() {
               </button>
             </div>
         )} {/* ++ End of HIDE Download Buttons ++ */}
+
+         {selectedRegionCells.length > 0 && !isManualColoringMode && (
+            <div
+              className="fixed inset-x-2 bottom-2 z-40 mx-auto max-w-sm rounded-xl border border-red-200 bg-white p-4 shadow-2xl dark:border-red-900/60 dark:bg-gray-900 sm:inset-x-3 sm:bottom-4"
+              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    已选中 {selectedRegionCells.length} 个色块
+                  </div>
+                  <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    可继续拖动画布重新选择，或确认删除选区
+                  </div>
+                </div>
+                <button
+                  onClick={resetRegionSelection}
+                  className="rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  aria-label="关闭区域选择"
+                >
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setSelectedRegionCells([])}
+                  className="min-h-11 rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+                >
+                  清空选区
+                </button>
+                <button
+                  onClick={handleDeleteSelectedRegionCells}
+                  className="min-h-11 rounded-lg bg-red-600 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-700"
+                >
+                  删除选中色块
+                </button>
+              </div>
+            </div>
+         )}
 
          {selectedCellAction && !isManualColoringMode && (
             <div className="fixed inset-x-3 bottom-4 z-40 mx-auto max-w-sm rounded-xl border border-gray-200 bg-white p-4 shadow-2xl dark:border-gray-700 dark:bg-gray-900">
