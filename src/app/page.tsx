@@ -103,8 +103,8 @@ import AIOptimizeModal from '../components/AIOptimizeModal';
 
 export default function Home() {
   const [originalImageSrc, setOriginalImageSrc] = useState<string | null>(null);
-  const [granularity, setGranularity] = useState<number>(70);
-  const [granularityInput, setGranularityInput] = useState<string>("70");
+  const [granularity, setGranularity] = useState<number>(50);
+  const [granularityInput, setGranularityInput] = useState<string>("50");
   const [similarityThreshold, setSimilarityThreshold] = useState<number>(12);
   const [similarityThresholdInput, setSimilarityThresholdInput] = useState<string>("12");
   const [maxColorCount, setMaxColorCount] = useState<number>(8);
@@ -660,7 +660,7 @@ export default function Home() {
     setTotalBeadCount(0);
     setInitialGridColorKeys(new Set()); // ++ 重置初始键 ++
     // ++ 重置横轴格子数量为默认值 ++
-    const defaultGranularity = 70;
+    const defaultGranularity = 50;
     setGranularity(defaultGranularity);
     setGranularityInput(defaultGranularity.toString());
     setRemapTrigger(prev => prev + 1); // Trigger full remap for new image

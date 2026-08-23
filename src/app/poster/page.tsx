@@ -20,7 +20,7 @@ import {
   readFileAsDataUrl,
 } from '../../utils/posterProcessing';
 
-type LayoutMode = 'auto' | '4x2' | '5x2' | '5x3';
+type LayoutMode = 'auto' | '1x1' | '1x2' | '2x1' | '2x2' | '3x2' | '4x2' | '5x2' | '5x3';
 type ItemStatus = 'idle' | 'processing' | 'done' | 'error';
 
 interface PosterItem {
@@ -88,12 +88,94 @@ const backgroundPresets = [
   ['#F2F2F2', '#D8E3EA'],
 ];
 
-function getColumns(count: number, mode: LayoutMode): number {
-  if (mode === '4x2') return 4;
-  if (mode === '5x2' || mode === '5x3') return 5;
-  if (count <= 3) return Math.max(1, count);
-  if (count <= 8) return 4;
-  return 5;
+interface PosterLayout {
+  cols: number;
+  rows: number;
+  capacity: number;
+}
+
+const fixedLayouts: Record<Exclude<LayoutMode, 'auto'>, PosterLayout> = {
+  '1x1': { cols: 1, rows: 1, capacity: 1 },
+  '1x2': { cols: 1, rows: 2, capacity: 2 },
+  '2x1': { cols: 2, rows: 1, capacity: 2 },
+  '2x2': { cols: 2, rows: 2, capacity: 4 },
+  '3x2': { cols: 3, rows: 2, capacity: 6 },
+  '4x2': { cols: 4, rows: 2, capacity: 8 },
+  '5x2': { cols: 5, rows: 2, capacity: 10 },
+  '5x3': { cols: 5, rows: 3, capacity: 15 },
+};
+
+function getPosterLayout(count: number, mode: LayoutMode): PosterLayout {
+  if (mode !== 'auto') return fixedLayouts[mode];
+  if (count <= 1) return fixedLayouts['1x1'];
+  if (count <= 2) return fixedLayouts['1x2'];
+  if (count <= 4) return fixedLayouts['2x2'];
+  if (count <= 6) return fixedLayouts['3x2'];
+  if (count <= 8) return fixedLayouts['4x2'];
+  if (count <= 10) return fixedLayouts['5x2'];
+  return fixedLayouts['5x3'];
+}
+
+function getPosterItemArea(layout: PosterLayout) {
+  if (layout.cols === 1 && layout.rows === 1) {
+    return { x: 120, y: 320, width: 840, height: 670 };
+  }
+  if (layout.cols === 1 && layout.rows === 2) {
+    return { x: 160, y: 318, width: 760, height: 690 };
+  }
+  if (layout.cols === 2 && layout.rows === 1) {
+    return { x: 90, y: 340, width: 900, height: 620 };
+  }
+  if (layout.rows === 2) {
+    return { x: 86, y: 360, width: 908, height: 600 };
+  }
+  return { x: 86, y: 320, width: 908, height: 650 };
+}
+
+function getImageBounds(layout: PosterLayout, cellWidth: number, cellHeight: number) {
+  if (layout.cols === 1 && layout.rows === 1) {
+    return {
+      maxWidth: Math.min(560, cellWidth * 0.78),
+      maxHeight: Math.min(440, cellHeight * 0.66),
+      imageCenterRatio: 0.45,
+      labelRatio: 0.84,
+      labelFontSize: 28,
+    };
+  }
+  if (layout.cols === 1 && layout.rows === 2) {
+    return {
+      maxWidth: Math.min(430, cellWidth * 0.72),
+      maxHeight: Math.min(238, cellHeight * 0.7),
+      imageCenterRatio: 0.44,
+      labelRatio: 0.82,
+      labelFontSize: 26,
+    };
+  }
+  if (layout.cols === 2 && layout.rows === 1) {
+    return {
+      maxWidth: Math.min(340, cellWidth * 0.76),
+      maxHeight: Math.min(360, cellHeight * 0.62),
+      imageCenterRatio: 0.46,
+      labelRatio: 0.82,
+      labelFontSize: 26,
+    };
+  }
+  if (layout.cols === 2) {
+    return {
+      maxWidth: Math.min(300, cellWidth * 0.72),
+      maxHeight: Math.min(230, cellHeight * 0.68),
+      imageCenterRatio: 0.42,
+      labelRatio: 0.82,
+      labelFontSize: 24,
+    };
+  }
+  return {
+    maxWidth: Math.min(layout.rows > 2 ? 168 : 190, cellWidth * 0.82),
+    maxHeight: Math.min(layout.rows > 2 ? 146 : 190, cellHeight * 0.64),
+    imageCenterRatio: 0.42,
+    labelRatio: 0.82,
+    labelFontSize: 23,
+  };
 }
 
 function drawTextFit(
@@ -192,20 +274,16 @@ async function renderPosterCanvas(
   ctx.textBaseline = 'middle';
   ctx.fillText(settings.subtitle || '', width / 2, 242);
 
-  const visibleItems = items.slice(0, 15);
+  const layout = getPosterLayout(items.length, settings.layoutMode);
+  const visibleItems = items.slice(0, layout.capacity);
   const count = visibleItems.length;
-  const cols = getColumns(count, settings.layoutMode);
-  const rows = Math.max(1, Math.ceil(count / Math.max(1, cols)));
-  const area = {
-    x: 86,
-    y: rows > 2 ? 320 : 380,
-    width: 908,
-    height: rows > 2 ? 650 : 560,
-  };
+  const cols = layout.cols;
+  const rows = layout.rows;
+  const visibleRows = layout.cols === 1 ? Math.max(1, Math.min(layout.rows, count)) : rows;
+  const area = getPosterItemArea(layout);
   const cellWidth = area.width / cols;
-  const cellHeight = area.height / rows;
-  const imageMaxWidth = Math.min(172, cellWidth * 0.82);
-  const imageMaxHeight = Math.min(rows > 2 ? 146 : 190, cellHeight * 0.64);
+  const cellHeight = area.height / visibleRows;
+  const imageBounds = getImageBounds(layout, cellWidth, cellHeight);
 
   const loadedImages = await Promise.all(
     visibleItems.map(async (item) => {
@@ -223,21 +301,21 @@ async function renderPosterCanvas(
     const col = index % cols;
     const centerX = area.x + col * cellWidth + cellWidth / 2;
     const cellTop = area.y + row * cellHeight;
-    const imageCenterY = cellTop + cellHeight * 0.42;
-    const labelY = cellTop + cellHeight * 0.82;
+    const imageCenterY = cellTop + cellHeight * imageBounds.imageCenterRatio;
+    const labelY = cellTop + cellHeight * imageBounds.labelRatio;
 
     if (img) {
-      drawContainImage(ctx, img, centerX, imageCenterY, imageMaxWidth, imageMaxHeight, true);
+      drawContainImage(ctx, img, centerX, imageCenterY, imageBounds.maxWidth, imageBounds.maxHeight, true);
     } else {
       ctx.fillStyle = 'rgba(255,255,255,0.42)';
       ctx.fillRect(centerX - 58, imageCenterY - 58, 116, 116);
     }
 
-    ctx.font = '600 23px Arial, sans-serif';
+    ctx.font = `600 ${imageBounds.labelFontSize}px Arial, sans-serif`;
     ctx.fillStyle = 'rgba(54, 38, 28, 0.92)';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const label = `${String(index + 1).padStart(2, '0')} ${item.label || '未命名'}`;
+    const label = item.label || '未命名';
     ctx.fillText(label, centerX, labelY, cellWidth - 16);
   });
 
@@ -608,6 +686,11 @@ export default function PosterPage() {
               className="mt-1 min-h-11 w-full rounded-md border border-slate-300 px-3 py-2 text-base md:text-sm"
             >
               <option value="auto">自动</option>
+              <option value="1x1">1 x 1</option>
+              <option value="1x2">1 x 2</option>
+              <option value="2x1">2 x 1</option>
+              <option value="2x2">2 x 2</option>
+              <option value="3x2">3 x 2</option>
               <option value="4x2">4 x 2</option>
               <option value="5x2">5 x 2</option>
               <option value="5x3">5 x 3</option>
