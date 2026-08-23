@@ -1,11 +1,6 @@
 // 火山引擎即梦 AI 客户端直接调用
 // 用于静态部署场景，直接从浏览器调用火山引擎 API
 
-interface Env {
-  VOLC_ACCESS_KEY_ID: string;
-  VOLC_SECRET_ACCESS_KEY: string;
-}
-
 const VOLC_API_HOST = 'visual.volcengineapi.com';
 const VOLC_API_REGION = 'cn-north-1';
 const VOLC_API_SERVICE = 'cv';
@@ -15,7 +10,6 @@ const encoder = new TextEncoder();
 const HEADER_KEYS_TO_IGNORE = new Set([
   'authorization',
   'content-length',
-  'content-type',
   'user-agent',
 ]);
 
@@ -23,20 +17,26 @@ function toHex(buf: Uint8Array): string {
   return Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
 async function hmac(key: Uint8Array, data: string): Promise<Uint8Array> {
   const cryptoKey = await crypto.subtle.importKey(
     'raw',
-    key,
+    toArrayBuffer(key),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign']
   );
-  const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
+  const sig = await crypto.subtle.sign('HMAC', cryptoKey, toArrayBuffer(encoder.encode(data)));
   return new Uint8Array(sig);
 }
 
 async function sha256(data: string): Promise<string> {
-  const hashBuf = await crypto.subtle.digest('SHA-256', encoder.encode(data));
+  const hashBuf = await crypto.subtle.digest('SHA-256', toArrayBuffer(encoder.encode(data)));
   return toHex(new Uint8Array(hashBuf));
 }
 
@@ -45,7 +45,7 @@ function uriEscape(str: string): string {
     return encodeURIComponent(str)
       .replace(/[^A-Za-z0-9_.~\-%]+/g, (c) => c)
       .replace(/[*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
-  } catch (e) {
+  } catch {
     return '';
   }
 }
@@ -164,6 +164,7 @@ async function submitTask(imageBase64: string, prompt: string, accessKeyId: stri
   const headers: Record<string, string> = {
     'host': VOLC_API_HOST,
     'X-Date': xDate,
+    'X-Content-Sha256': bodySha,
     'content-type': 'application/json'
   };
 
@@ -182,8 +183,7 @@ async function submitTask(imageBase64: string, prompt: string, accessKeyId: stri
     method: 'POST',
     headers: {
       ...headers,
-      'Authorization': authorization,
-      'Content-Length': encoder.encode(body).length.toString()
+      'Authorization': authorization
     },
     body: body
   });
@@ -239,6 +239,7 @@ async function queryTask(taskId: string, accessKeyId: string, secretAccessKey: s
   const headers: Record<string, string> = {
     'host': VOLC_API_HOST,
     'X-Date': xDate,
+    'X-Content-Sha256': bodySha,
     'content-type': 'application/json'
   };
 
@@ -257,8 +258,7 @@ async function queryTask(taskId: string, accessKeyId: string, secretAccessKey: s
     method: 'POST',
     headers: {
       ...headers,
-      'Authorization': authorization,
-      'Content-Length': encoder.encode(body).length.toString()
+      'Authorization': authorization
     },
     body: body
   });
