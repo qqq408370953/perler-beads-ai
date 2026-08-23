@@ -42,6 +42,7 @@ interface PosterSettings {
   fixedText: string;
   backgroundStart: string;
   backgroundEnd: string;
+  useGradientBackground: boolean;
   layoutMode: LayoutMode;
   backgroundRemovalMode: BackgroundRemovalMode;
   pixelate: boolean;
@@ -55,6 +56,7 @@ const defaultSettings: PosterSettings = {
   fixedText: '图纸在粉丝群',
   backgroundStart: '#58C7C2',
   backgroundEnd: '#F4F7F5',
+  useGradientBackground: true,
   layoutMode: 'auto',
   backgroundRemovalMode: 'local',
   pixelate: true,
@@ -249,30 +251,40 @@ async function renderPosterCanvas(
   if (!ctx) return;
 
   ctx.clearRect(0, 0, width, height);
-  const gradient = ctx.createLinearGradient(0, 0, width, 0);
-  gradient.addColorStop(0, settings.backgroundStart);
-  gradient.addColorStop(1, settings.backgroundEnd);
-  ctx.fillStyle = gradient;
+  if (settings.useGradientBackground) {
+    const gradient = ctx.createLinearGradient(0, 0, width, 0);
+    gradient.addColorStop(0, settings.backgroundStart);
+    gradient.addColorStop(1, settings.backgroundEnd);
+    ctx.fillStyle = gradient;
+  } else {
+    ctx.fillStyle = settings.backgroundStart;
+  }
   ctx.fillRect(0, 0, width, height);
 
-  drawTextFit(
-    ctx,
-    settings.title || 'TITLE',
-    width / 2,
-    150,
-    780,
-    76,
-    42,
-    'Impact, Arial Black, sans-serif',
-    '#ffffff',
-    { color: '#24160f', width: 12 }
-  );
+  const titleText = settings.title.trim();
+  if (titleText) {
+    drawTextFit(
+      ctx,
+      titleText,
+      width / 2,
+      150,
+      780,
+      76,
+      42,
+      'Impact, Arial Black, sans-serif',
+      '#ffffff',
+      { color: '#24160f', width: 12 }
+    );
+  }
 
-  ctx.font = '400 30px Arial, sans-serif';
-  ctx.fillStyle = 'rgba(52, 34, 23, 0.88)';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(settings.subtitle || '', width / 2, 242);
+  const subtitleText = settings.subtitle.trim();
+  if (subtitleText) {
+    ctx.font = '400 30px Arial, sans-serif';
+    ctx.fillStyle = 'rgba(52, 34, 23, 0.88)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(subtitleText, width / 2, 242);
+  }
 
   const layout = getPosterLayout(items.length, settings.layoutMode);
   const visibleItems = items.slice(0, layout.capacity);
@@ -315,8 +327,10 @@ async function renderPosterCanvas(
     ctx.fillStyle = 'rgba(54, 38, 28, 0.92)';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const label = item.label || '未命名';
-    ctx.fillText(label, centerX, labelY, cellWidth - 16);
+    const label = item.label.trim();
+    if (label) {
+      ctx.fillText(label, centerX, labelY, cellWidth - 16);
+    }
   });
 
   if (count === 0) {
@@ -325,18 +339,21 @@ async function renderPosterCanvas(
     ctx.fillText('上传图片后自动生成排版预览', width / 2, 650);
   }
 
-  drawTextFit(
-    ctx,
-    settings.bottomTitle || '自定义标题',
-    width / 2,
-    1146,
-    840,
-    92,
-    48,
-    'Arial Black, PingFang SC, Microsoft YaHei, sans-serif',
-    '#ffffff',
-    { color: '#050505', width: 14 }
-  );
+  const bottomTitleText = settings.bottomTitle.trim();
+  if (bottomTitleText) {
+    drawTextFit(
+      ctx,
+      bottomTitleText,
+      width / 2,
+      1146,
+      840,
+      92,
+      48,
+      'Arial Black, PingFang SC, Microsoft YaHei, sans-serif',
+      '#ffffff',
+      { color: '#050505', width: 14 }
+    );
+  }
 
   drawTextFit(
     ctx,
@@ -354,10 +371,6 @@ async function renderPosterCanvas(
 
 function createId(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function filenameToLabel(name: string): string {
-  return name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || '未命名';
 }
 
 export default function PosterPage() {
@@ -400,7 +413,7 @@ export default function PosterPage() {
           id: createId(),
           originalSrc: dataUrl,
           processedSrc: dataUrl,
-          label: filenameToLabel(file.name),
+          label: '',
           status: 'idle',
           progressText: '待处理',
           progress: 0,
@@ -650,6 +663,20 @@ export default function PosterPage() {
 
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="text-sm font-black">样式</h2>
+            <label className="mt-3 flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-sm font-semibold">
+              <span>
+                渐变背景
+                <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                  关闭后只使用左侧颜色作为纯色背景
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={settings.useGradientBackground}
+                onChange={(event) => updateSettings('useGradientBackground', event.target.checked)}
+                className="h-6 w-6 shrink-0"
+              />
+            </label>
             <div className="mt-3 grid grid-cols-5 gap-2 sm:grid-cols-6">
               {backgroundPresets.map(([start, end]) => (
                 <button
@@ -665,18 +692,27 @@ export default function PosterPage() {
               ))}
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <input
-                type="color"
-                value={settings.backgroundStart}
-                onChange={(event) => updateSettings('backgroundStart', event.target.value)}
-                className="h-11 w-full rounded-md border border-slate-300"
-              />
-              <input
-                type="color"
-                value={settings.backgroundEnd}
-                onChange={(event) => updateSettings('backgroundEnd', event.target.value)}
-                className="h-11 w-full rounded-md border border-slate-300"
-              />
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-slate-500">
+                  {settings.useGradientBackground ? '起始颜色' : '纯色背景'}
+                </span>
+                <input
+                  type="color"
+                  value={settings.backgroundStart}
+                  onChange={(event) => updateSettings('backgroundStart', event.target.value)}
+                  className="h-11 w-full rounded-md border border-slate-300"
+                />
+              </label>
+              <label className={`block ${settings.useGradientBackground ? '' : 'opacity-45'}`}>
+                <span className="mb-1 block text-xs font-bold text-slate-500">结束颜色</span>
+                <input
+                  type="color"
+                  value={settings.backgroundEnd}
+                  onChange={(event) => updateSettings('backgroundEnd', event.target.value)}
+                  disabled={!settings.useGradientBackground}
+                  className="h-11 w-full rounded-md border border-slate-300 disabled:cursor-not-allowed"
+                />
+              </label>
             </div>
 
             <label className="mt-3 block text-xs font-bold text-slate-500">布局</label>
