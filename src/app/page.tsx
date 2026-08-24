@@ -2334,6 +2334,14 @@ export default function Home() {
           <p className="mt-4 text-base sm:text-lg font-light text-gray-600 dark:text-gray-300 max-w-lg mx-auto text-center tracking-[0.1em] leading-relaxed">
             AI帮帮忙，像素创意更简单
           </p>
+          <div className="mt-5 flex justify-center">
+            <a
+              href="/gallery"
+              className="inline-flex min-h-11 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-pink-500 px-6 py-2.5 text-sm font-black text-white shadow-md transition hover:-translate-y-0.5 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-orange-400 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
+            >
+              图纸广场
+            </a>
+          </div>
  
           
           {/* 添加小红书交流群链接 */}
