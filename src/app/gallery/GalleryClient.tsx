@@ -3,15 +3,16 @@
 /* eslint-disable @next/next/no-img-element */
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { GalleryPattern, galleryPatterns } from '../../data/galleryPatterns';
+import { getLocalGalleryPatterns, LOCAL_GALLERY_UPDATED_EVENT } from '../../utils/galleryLocalStore';
 
 type CopyState = 'idle' | 'copied' | 'failed';
 
 const allCategory = '全部';
 
-function getCategories() {
-  return [allCategory, ...Array.from(new Set(galleryPatterns.map((item) => item.category)))];
+function getCategories(patterns: GalleryPattern[]) {
+  return [allCategory, ...Array.from(new Set(patterns.map((item) => item.category)))];
 }
 
 function copyWithFallback(text: string) {
@@ -40,12 +41,40 @@ export default function GalleryClient() {
   const [activeCategory, setActiveCategory] = useState(allCategory);
   const [selectedPattern, setSelectedPattern] = useState<GalleryPattern | null>(null);
   const [copyState, setCopyState] = useState<CopyState>('idle');
+  const [localPatterns, setLocalPatterns] = useState<GalleryPattern[]>([]);
 
-  const categories = useMemo(getCategories, []);
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadLocalPatterns = async () => {
+      const records = await getLocalGalleryPatterns();
+      if (isMounted) {
+        setLocalPatterns(records);
+      }
+    };
+
+    loadLocalPatterns();
+    window.addEventListener(LOCAL_GALLERY_UPDATED_EVENT, loadLocalPatterns);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener(LOCAL_GALLERY_UPDATED_EVENT, loadLocalPatterns);
+    };
+  }, []);
+
+  const allPatterns = useMemo(() => {
+    const localById = new Map(localPatterns.map((pattern) => [pattern.id, pattern]));
+    const staticIds = new Set(galleryPatterns.map((pattern) => pattern.id));
+    const overriddenStaticPatterns = galleryPatterns.map((pattern) => localById.get(pattern.id) ?? pattern);
+    const localOnlyPatterns = localPatterns.filter((pattern) => !staticIds.has(pattern.id));
+
+    return [...localOnlyPatterns, ...overriddenStaticPatterns];
+  }, [localPatterns]);
+  const categories = useMemo(() => getCategories(allPatterns), [allPatterns]);
   const visiblePatterns = useMemo(() => {
-    if (activeCategory === allCategory) return galleryPatterns;
-    return galleryPatterns.filter((item) => item.category === activeCategory);
-  }, [activeCategory]);
+    if (activeCategory === allCategory) return allPatterns;
+    return allPatterns.filter((item) => item.category === activeCategory);
+  }, [activeCategory, allPatterns]);
 
   const closeModal = () => {
     setSelectedPattern(null);
@@ -56,7 +85,13 @@ export default function GalleryClient() {
     if (!selectedPattern) return;
 
     try {
-      await copyWithFallback(selectedPattern.cloudDriveText ?? selectedPattern.cloudDriveUrl);
+      await copyWithFallback(
+        selectedPattern.cloudDriveText ??
+        [
+          selectedPattern.cloudDriveUrl,
+          selectedPattern.cloudDrivePassword ? `口令/提取码：${selectedPattern.cloudDrivePassword}` : '',
+        ].filter(Boolean).join('\n')
+      );
       setCopyState('copied');
       window.setTimeout(() => setCopyState('idle'), 1800);
     } catch {
@@ -103,7 +138,7 @@ export default function GalleryClient() {
             </p>
           </div>
           <div className="rounded-full border border-emerald-100 bg-emerald-50 px-4 py-2 text-sm font-bold text-emerald-700">
-            共 {galleryPatterns.length} 张图纸
+            共 {allPatterns.length} 张图纸
           </div>
         </div>
 
@@ -111,8 +146,8 @@ export default function GalleryClient() {
           {categories.map((category) => {
             const count =
               category === allCategory
-                ? galleryPatterns.length
-                : galleryPatterns.filter((item) => item.category === category).length;
+                ? allPatterns.length
+                : allPatterns.filter((item) => item.category === category).length;
             const isActive = activeCategory === category;
 
             return (
@@ -232,7 +267,12 @@ export default function GalleryClient() {
                         {selectedPattern.cloudDriveText}
                       </pre>
                     ) : (
-                      <p className="mt-2 break-all">{selectedPattern.cloudDriveUrl}</p>
+                      <div className="mt-2 space-y-1">
+                        <p className="break-all">{selectedPattern.cloudDriveUrl}</p>
+                        {selectedPattern.cloudDrivePassword && (
+                          <p className="font-semibold">口令/提取码：{selectedPattern.cloudDrivePassword}</p>
+                        )}
+                      </div>
                     )}
                   </div>
                   <button

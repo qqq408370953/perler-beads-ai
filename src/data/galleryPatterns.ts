@@ -8,6 +8,7 @@ export interface GalleryPattern {
   patternPreviewImage?: string;
   cloudDriveUrl: string;
   cloudDriveLabel?: string;
+  cloudDrivePassword?: string;
   cloudDriveText?: string;
   description?: string;
 }
