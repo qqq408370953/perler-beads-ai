@@ -1402,8 +1402,153 @@ export default function Home() {
         setSelectedColor(null);
     };
 
+  const calculateSubjectMaskGridFromImage = async (
+    imageSrc: string,
+    dimensions: { N: number; M: number }
+  ): Promise<boolean[][]> => {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new window.Image();
+      image.crossOrigin = 'anonymous';
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('无法加载原图用于主体识别'));
+      image.src = imageSrc;
+    });
+
+    const maxSide = 1200;
+    const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+    const width = Math.max(1, Math.round(img.width * scale));
+    const height = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) {
+      throw new Error('无法创建主体识别画布');
+    }
+
+    ctx.drawImage(img, 0, 0, width, height);
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const { data } = imageData;
+
+    let borderR = 0;
+    let borderG = 0;
+    let borderB = 0;
+    let borderCount = 0;
+
+    const sampleBorderPixel = (x: number, y: number) => {
+      const index = (y * width + x) * 4;
+      if (data[index + 3] < 32) return;
+      borderR += data[index];
+      borderG += data[index + 1];
+      borderB += data[index + 2];
+      borderCount++;
+    };
+
+    for (let x = 0; x < width; x++) {
+      sampleBorderPixel(x, 0);
+      sampleBorderPixel(x, height - 1);
+    }
+    for (let y = 1; y < height - 1; y++) {
+      sampleBorderPixel(0, y);
+      sampleBorderPixel(width - 1, y);
+    }
+
+    const backgroundRgb: RgbColor = borderCount > 0
+      ? {
+        r: Math.round(borderR / borderCount),
+        g: Math.round(borderG / borderCount),
+        b: Math.round(borderB / borderCount),
+      }
+      : { r: 255, g: 255, b: 255 };
+
+    const external = new Uint8Array(width * height);
+    const stack: number[] = [];
+    const backgroundThreshold = 48;
+
+    const pushIfBackground = (x: number, y: number) => {
+      if (x < 0 || x >= width || y < 0 || y >= height) return;
+      const key = y * width + x;
+      if (external[key]) return;
+
+      const index = key * 4;
+      const alpha = data[index + 3];
+      if (alpha < 32) {
+        external[key] = 1;
+        stack.push(key);
+        return;
+      }
+
+      const distance = colorDistance(
+        { r: data[index], g: data[index + 1], b: data[index + 2] },
+        backgroundRgb
+      );
+      if (distance > backgroundThreshold) return;
+
+      external[key] = 1;
+      stack.push(key);
+    };
+
+    for (let x = 0; x < width; x++) {
+      pushIfBackground(x, 0);
+      pushIfBackground(x, height - 1);
+    }
+    for (let y = 1; y < height - 1; y++) {
+      pushIfBackground(0, y);
+      pushIfBackground(width - 1, y);
+    }
+
+    while (stack.length > 0) {
+      const key = stack.pop()!;
+      const x = key % width;
+      const y = Math.floor(key / width);
+      pushIfBackground(x - 1, y);
+      pushIfBackground(x + 1, y);
+      pushIfBackground(x, y - 1);
+      pushIfBackground(x, y + 1);
+    }
+
+    const { N, M } = dimensions;
+    const cellWidth = width / N;
+    const cellHeight = height / M;
+    const subjectMaskGrid = Array(M).fill(null).map(() => Array(N).fill(false));
+
+    for (let row = 0; row < M; row++) {
+      for (let col = 0; col < N; col++) {
+        const startX = Math.floor(col * cellWidth);
+        const endX = Math.min(width, Math.ceil((col + 1) * cellWidth));
+        const startY = Math.floor(row * cellHeight);
+        const endY = Math.min(height, Math.ceil((row + 1) * cellHeight));
+        let opaqueCount = 0;
+        let subjectCount = 0;
+
+        for (let y = startY; y < endY; y++) {
+          for (let x = startX; x < endX; x++) {
+            const key = y * width + x;
+            const alpha = data[key * 4 + 3];
+            if (alpha < 32) continue;
+            opaqueCount++;
+            if (!external[key]) {
+              subjectCount++;
+            }
+          }
+        }
+
+        const centerX = Math.min(width - 1, Math.max(0, Math.floor((startX + endX) / 2)));
+        const centerY = Math.min(height - 1, Math.max(0, Math.floor((startY + endY) / 2)));
+        const centerKey = centerY * width + centerX;
+        const centerIsSubject = data[centerKey * 4 + 3] >= 32 && !external[centerKey];
+        const subjectCoverage = opaqueCount > 0 ? subjectCount / opaqueCount : 0;
+
+        subjectMaskGrid[row][col] = centerIsSubject || subjectCoverage >= 0.35;
+      }
+    }
+
+    return subjectMaskGrid;
+  };
+
   // 一键去背景：识别边缘主色并洪水填充去除
-  const handleAutoRemoveBackground = () => {
+  const handleAutoRemoveBackground = async () => {
     if (!mappedPixelData || !gridDimensions) {
       alert('请先生成图纸后再使用一键去背景。');
       return;
@@ -1442,40 +1587,81 @@ export default function Home() {
     });
 
     const newPixelData = mappedPixelData.map(row => row.map(cell => ({ ...cell })));
-    const visited = Array(M).fill(null).map(() => Array(N).fill(false));
-    const stack: { row: number; col: number }[] = [];
+    let removedBackgroundCount = 0;
+    let preservedSubjectBackgroundCount = 0;
+    let usedSubjectMask = false;
 
-    const pushIfTarget = (row: number, col: number) => {
-      if (row < 0 || row >= M || col < 0 || col >= N || visited[row][col]) {
+    if (originalImageSrc) {
+      try {
+        const subjectMaskGrid = await calculateSubjectMaskGridFromImage(originalImageSrc, gridDimensions);
+
+        for (let row = 0; row < M; row++) {
+          for (let col = 0; col < N; col++) {
+            const cell = newPixelData[row][col];
+            if (!cell || cell.isExternal || cell.key === TRANSPARENT_KEY || cell.key !== targetKey) {
+              continue;
+            }
+
+            if (subjectMaskGrid[row]?.[col]) {
+              newPixelData[row][col] = {
+                ...cell,
+                isExternal: false
+              };
+              preservedSubjectBackgroundCount++;
+            } else {
+              newPixelData[row][col] = { ...transparentColorData };
+              removedBackgroundCount++;
+            }
+          }
+        }
+
+        usedSubjectMask = removedBackgroundCount + preservedSubjectBackgroundCount > 0;
+        if (usedSubjectMask) {
+          console.log(
+            `一键去背景：基于原图主体 mask 移除 ${removedBackgroundCount} 个背景格子，保留 ${preservedSubjectBackgroundCount} 个主体内同色格子。`
+          );
+        }
+      } catch (error) {
+        console.warn('主体 mask 计算失败，回退到边缘洪水填充去背景:', error);
+      }
+    }
+
+    if (!usedSubjectMask) {
+      const visited = Array(M).fill(null).map(() => Array(N).fill(false));
+      const stack: { row: number; col: number }[] = [];
+
+      const pushIfTarget = (row: number, col: number) => {
+        if (row < 0 || row >= M || col < 0 || col >= N || visited[row][col]) {
+          return;
+        }
+        const cell = newPixelData[row][col];
+        if (!cell || cell.isExternal || cell.key !== targetKey) return;
+        visited[row][col] = true;
+        stack.push({ row, col });
+      };
+
+      for (let col = 0; col < N; col++) {
+        pushIfTarget(0, col);
+        if (M > 1) pushIfTarget(M - 1, col);
+      }
+      for (let row = 1; row < M - 1; row++) {
+        pushIfTarget(row, 0);
+        if (N > 1) pushIfTarget(row, N - 1);
+      }
+
+      if (stack.length === 0) {
+        alert('未找到可去除的背景区域。');
         return;
       }
-      const cell = newPixelData[row][col];
-      if (!cell || cell.isExternal || cell.key !== targetKey) return;
-      visited[row][col] = true;
-      stack.push({ row, col });
-    };
 
-    for (let col = 0; col < N; col++) {
-      pushIfTarget(0, col);
-      if (M > 1) pushIfTarget(M - 1, col);
-    }
-    for (let row = 1; row < M - 1; row++) {
-      pushIfTarget(row, 0);
-      if (N > 1) pushIfTarget(row, N - 1);
-    }
-
-    if (stack.length === 0) {
-      alert('未找到可去除的背景区域。');
-      return;
-    }
-
-    while (stack.length > 0) {
-      const { row, col } = stack.pop()!;
-      newPixelData[row][col] = { ...transparentColorData };
-      pushIfTarget(row - 1, col);
-      pushIfTarget(row + 1, col);
-      pushIfTarget(row, col - 1);
-      pushIfTarget(row, col + 1);
+      while (stack.length > 0) {
+        const { row, col } = stack.pop()!;
+        newPixelData[row][col] = { ...transparentColorData };
+        pushIfTarget(row - 1, col);
+        pushIfTarget(row + 1, col);
+        pushIfTarget(row, col - 1);
+        pushIfTarget(row, col + 1);
+      }
     }
 
     setMappedPixelData(newPixelData);
