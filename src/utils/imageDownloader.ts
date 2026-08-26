@@ -223,8 +223,16 @@ function isIOSBrowser(): boolean {
   );
 }
 
+function isMobileBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const userAgent = navigator.userAgent || '';
+  return isIOSBrowser() || /Android|Mobile|MicroMessenger|MQQBrowser|UCBrowser|Baidu/i.test(userAgent);
+}
+
 function getDownloadCellSize(N: number, M: number): number {
-  const maxGridSide = isIOSBrowser() ? 3600 : 7200;
+  // Mobile Safari and many in-app browsers fail or produce blank images when
+  // canvas dimensions become too large. Keep mobile exports below a safer size.
+  const maxGridSide = isMobileBrowser() ? 2400 : 7200;
   const largestSide = Math.max(N, M);
   if (largestSide <= 0) return 30;
 
@@ -259,15 +267,167 @@ function triggerBrowserDownload(blob: Blob, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
+function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+      } else {
+        reject(new Error('图片转换失败'));
+      }
+    };
+    reader.onerror = () => reject(new Error('图片读取失败'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+export function releaseDownloadImagePreviewUrl(imageUrl?: string | null): void {
+  if (imageUrl?.startsWith('blob:')) {
+    URL.revokeObjectURL(imageUrl);
+  }
+}
+
+async function showMobileImageSaveOverlay(blob: Blob, filename: string): Promise<void> {
+  if (typeof document === 'undefined') return;
+
+  const imageUrl = await readBlobAsDataUrl(blob);
+  const overlay = document.createElement('div');
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.style.cssText = [
+    'position:fixed',
+    'inset:0',
+    'z-index:2147483647',
+    'background:rgba(0,0,0,0.78)',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'padding:16px',
+    'box-sizing:border-box',
+  ].join(';');
+
+  const panel = document.createElement('div');
+  panel.style.cssText = [
+    'width:min(100%,720px)',
+    'max-height:92vh',
+    'background:#fff',
+    'border-radius:14px',
+    'overflow:hidden',
+    'box-shadow:0 20px 60px rgba(0,0,0,0.35)',
+    'display:flex',
+    'flex-direction:column',
+  ].join(';');
+
+  const header = document.createElement('div');
+  header.style.cssText = [
+    'padding:14px 16px',
+    'border-bottom:1px solid #e5e7eb',
+    'font:600 16px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+    'color:#111827',
+  ].join(';');
+  header.textContent = '图纸已生成';
+
+  const body = document.createElement('div');
+  body.style.cssText = [
+    'overflow:auto',
+    'background:#f3f4f6',
+    'padding:12px',
+    'text-align:center',
+    'flex:1',
+  ].join(';');
+
+  const image = document.createElement('img');
+  image.src = imageUrl;
+  image.alt = filename;
+  image.style.cssText = [
+    'max-width:100%',
+    'height:auto',
+    'background:#fff',
+    'border-radius:8px',
+    'box-shadow:0 4px 16px rgba(0,0,0,0.12)',
+    '-webkit-touch-callout:default',
+    'user-select:auto',
+  ].join(';');
+  body.appendChild(image);
+
+  const hint = document.createElement('div');
+  hint.style.cssText = [
+    'padding:10px 16px 0',
+    'font:500 13px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+    'line-height:1.5',
+    'color:#4b5563',
+  ].join(';');
+  hint.textContent = '移动端如未自动保存，请长按图片选择“保存到相册”，或点“打开图片”后再保存。';
+
+  const footer = document.createElement('div');
+  footer.style.cssText = [
+    'display:flex',
+    'gap:10px',
+    'padding:14px 16px 16px',
+    'border-top:1px solid #e5e7eb',
+    'background:#fff',
+  ].join(';');
+
+  const closeOverlay = () => {
+    overlay.remove();
+  };
+
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.textContent = '关闭';
+  closeButton.style.cssText = [
+    'flex:1',
+    'min-height:44px',
+    'border:1px solid #d1d5db',
+    'border-radius:10px',
+    'background:#fff',
+    'color:#111827',
+    'font:700 15px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+  ].join(';');
+  closeButton.onclick = closeOverlay;
+
+  const openButton = document.createElement('button');
+  openButton.type = 'button';
+  openButton.textContent = '打开图片';
+  openButton.style.cssText = [
+    'flex:1',
+    'min-height:44px',
+    'border:0',
+    'border-radius:10px',
+    'background:#16a34a',
+    'color:#fff',
+    'font:700 15px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+  ].join(';');
+  openButton.onclick = () => {
+    const openedWindow = window.open(imageUrl, '_blank', 'noopener,noreferrer');
+    if (!openedWindow) {
+      window.location.href = imageUrl;
+    }
+  };
+
+  footer.appendChild(closeButton);
+  footer.appendChild(openButton);
+  panel.appendChild(header);
+  panel.appendChild(body);
+  panel.appendChild(hint);
+  panel.appendChild(footer);
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
 export async function saveImageBlob(blob: Blob, filename: string): Promise<void> {
-  const file = new File([blob], filename, { type: blob.type || 'image/png' });
+  const file = typeof File !== 'undefined'
+    ? new File([blob], filename, { type: blob.type || 'image/png' })
+    : null;
   const navigatorWithShare = navigator as Navigator & {
     canShare?: (data: ShareData) => boolean;
     share?: (data: ShareData) => Promise<void>;
   };
 
   if (
-    isIOSBrowser() &&
+    isMobileBrowser() &&
+    file &&
     navigatorWithShare.share &&
     navigatorWithShare.canShare?.({ files: [file] })
   ) {
@@ -284,6 +444,11 @@ export async function saveImageBlob(blob: Blob, filename: string): Promise<void>
       }
       console.warn('系统分享保存失败，尝试普通下载:', error);
     }
+  }
+
+  if (isMobileBrowser() && blob.type.startsWith('image/')) {
+    await showMobileImageSaveOverlay(blob, filename);
+    return;
   }
 
   triggerBrowserDownload(blob, filename);
@@ -689,7 +854,7 @@ export async function generateDownloadImagePreview({
 
     try {
       const blob = await canvasToPngBlob(downloadCanvas);
-      const imageUrl = URL.createObjectURL(blob);
+      const imageUrl = isMobileBrowser() ? downloadCanvas.toDataURL('image/png') : URL.createObjectURL(blob);
       const filename = showCellNumbers
         ? `bead-grid-${N}x${M}-keys-palette_${selectedColorSystem}.png`
         : `bead-grid-${N}x${M}-pixel-palette_${selectedColorSystem}.png`;
@@ -710,7 +875,7 @@ export async function downloadImage(params: DownloadImageParams): Promise<void> 
 
   try {
     await saveImageBlob(result.blob, result.filename);
-    URL.revokeObjectURL(result.imageUrl);
+    releaseDownloadImagePreviewUrl(result.imageUrl);
     console.log("Grid image download initiated.");
 
     // 如果启用了CSV导出，同时导出CSV文件

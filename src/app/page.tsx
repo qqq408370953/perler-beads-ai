@@ -19,7 +19,13 @@ import {
 // 导入新的类型和组件
 import { GridDownloadOptions } from '../types/downloadTypes';
 import DownloadSettingsModal, { gridLineColorOptions } from '../components/DownloadSettingsModal';
-import { downloadImage, generateDownloadImagePreview, importCsvData, saveImageBlob } from '../utils/imageDownloader';
+import {
+  downloadImage,
+  generateDownloadImagePreview,
+  importCsvData,
+  releaseDownloadImagePreviewUrl,
+  saveImageBlob,
+} from '../utils/imageDownloader';
 
 import { 
   colorSystemOptions, 
@@ -1349,7 +1355,7 @@ export default function Home() {
 
         if (preview) {
           await saveImageBlob(preview.blob, preview.filename);
-          URL.revokeObjectURL(preview.imageUrl);
+          releaseDownloadImagePreviewUrl(preview.imageUrl);
         }
       } catch (error) {
         console.error('下载当前预览失败:', error);

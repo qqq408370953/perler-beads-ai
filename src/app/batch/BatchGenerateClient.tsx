@@ -5,7 +5,12 @@
 import Link from 'next/link';
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { GridDownloadOptions } from '../../types/downloadTypes';
-import { downloadImage, generateDownloadImagePreview, saveImageBlob } from '../../utils/imageDownloader';
+import {
+  downloadImage,
+  generateDownloadImagePreview,
+  releaseDownloadImagePreviewUrl,
+  saveImageBlob,
+} from '../../utils/imageDownloader';
 import { colorSystemOptions, ColorSystem } from '../../utils/colorSystemUtils';
 import { PixelationMode } from '../../utils/pixelation';
 import {
@@ -208,7 +213,7 @@ export default function BatchGenerateClient() {
         revokeUrl(item.sourceUrl);
         revokeUrl(item.thumbnailUrl);
       });
-      revokeUrl(previewRef.current?.imageUrl);
+      releaseDownloadImagePreviewUrl(previewRef.current?.imageUrl);
     }
   ), []);
 
@@ -341,7 +346,7 @@ export default function BatchGenerateClient() {
     if (!finalPreview) return;
 
     setPreview((currentPreview) => {
-      revokeUrl(currentPreview?.imageUrl);
+      releaseDownloadImagePreviewUrl(currentPreview?.imageUrl);
       return {
         itemId: item.id,
         title: item.fileName,
@@ -403,7 +408,7 @@ export default function BatchGenerateClient() {
 
   const closePreview = () => {
     setPreview((currentPreview) => {
-      revokeUrl(currentPreview?.imageUrl);
+      releaseDownloadImagePreviewUrl(currentPreview?.imageUrl);
       return null;
     });
   };
