@@ -219,14 +219,21 @@ export interface DownloadImagePreviewResult {
 function isIOSBrowser(): boolean {
   if (typeof navigator === 'undefined') return false;
   return /iPad|iPhone|iPod/.test(navigator.userAgent) || (
-    navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+    navigator.platform === 'MacIntel' &&
+    navigator.maxTouchPoints > 1 &&
+    typeof window !== 'undefined' &&
+    Math.min(window.innerWidth, window.innerHeight) <= 1024
   );
 }
 
 function isMobileBrowser(): boolean {
-  if (typeof navigator === 'undefined') return false;
+  if (typeof navigator === 'undefined' || typeof window === 'undefined') return false;
   const userAgent = navigator.userAgent || '';
-  return isIOSBrowser() || /Android|Mobile|MicroMessenger|MQQBrowser|UCBrowser|Baidu/i.test(userAgent);
+  const isMobileUserAgent = /iPad|iPhone|iPod|Android|Mobile|MicroMessenger|MQQBrowser|UCBrowser|Baidu/i.test(userAgent);
+  const hasMobileViewport = Math.min(window.innerWidth, window.innerHeight) <= 820;
+  const hasCoarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+
+  return isIOSBrowser() || (isMobileUserAgent && (hasMobileViewport || hasCoarsePointer));
 }
 
 function getDownloadCellSize(N: number, M: number): number {
@@ -417,35 +424,6 @@ async function showMobileImageSaveOverlay(blob: Blob, filename: string): Promise
 }
 
 export async function saveImageBlob(blob: Blob, filename: string): Promise<void> {
-  const file = typeof File !== 'undefined'
-    ? new File([blob], filename, { type: blob.type || 'image/png' })
-    : null;
-  const navigatorWithShare = navigator as Navigator & {
-    canShare?: (data: ShareData) => boolean;
-    share?: (data: ShareData) => Promise<void>;
-  };
-
-  if (
-    isMobileBrowser() &&
-    file &&
-    navigatorWithShare.share &&
-    navigatorWithShare.canShare?.({ files: [file] })
-  ) {
-    try {
-      await navigatorWithShare.share({
-        files: [file],
-        title: '拼豆图纸',
-        text: '保存生成的拼豆图纸',
-      });
-      return;
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        return;
-      }
-      console.warn('系统分享保存失败，尝试普通下载:', error);
-    }
-  }
-
   if (isMobileBrowser() && blob.type.startsWith('image/')) {
     await showMobileImageSaveOverlay(blob, filename);
     return;
