@@ -156,6 +156,7 @@ export default function Home() {
   } | null>(null);
   const [regionSelectionMode, setRegionSelectionMode] = useState<RegionSelectionMode>('none');
   const [selectedRegionCells, setSelectedRegionCells] = useState<RegionSelectionCell[]>([]);
+  const [selectedRegionReplaceTargetHex, setSelectedRegionReplaceTargetHex] = useState<string>('');
   const [remapTrigger, setRemapTrigger] = useState<number>(0);
   const [isManualColoringMode, setIsManualColoringMode] = useState<boolean>(false);
   const [selectedColor, setSelectedColor] = useState<MappedPixel | null>(null);
@@ -372,6 +373,22 @@ export default function Home() {
     ));
     setCellReplaceTargetHex(nextTarget?.color.toUpperCase() ?? '');
   }, [currentGridColors, selectedCellAction]);
+
+  useEffect(() => {
+    if (selectedRegionCells.length === 0) {
+      setSelectedRegionReplaceTargetHex('');
+      return;
+    }
+
+    if (
+      selectedRegionReplaceTargetHex &&
+      currentGridColors.some(color => color.color.toUpperCase() === selectedRegionReplaceTargetHex.toUpperCase())
+    ) {
+      return;
+    }
+
+    setSelectedRegionReplaceTargetHex(currentGridColors[0]?.color.toUpperCase() ?? '');
+  }, [currentGridColors, selectedRegionCells.length, selectedRegionReplaceTargetHex]);
 
   const hasUsablePattern = Boolean(
     mappedPixelData &&
@@ -1924,12 +1941,14 @@ export default function Home() {
   const resetRegionSelection = () => {
     setRegionSelectionMode('none');
     setSelectedRegionCells([]);
+    setSelectedRegionReplaceTargetHex('');
   };
 
   const handleRegionSelectionModeChange = (mode: RegionSelectionMode) => {
     setRegionSelectionMode(prevMode => {
       const nextMode = prevMode === mode ? 'none' : mode;
       setSelectedRegionCells([]);
+      setSelectedRegionReplaceTargetHex('');
       setSelectedCellAction(null);
       setTooltipData(null);
       setIsEraseMode(false);
@@ -1957,6 +1976,40 @@ export default function Home() {
       const cell = newPixelData[row]?.[col];
       if (cell && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
         newPixelData[row][col] = { ...transparentColorData };
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      updatePixelDataAndCounts(newPixelData);
+    }
+
+    resetRegionSelection();
+    setTooltipData(null);
+    setSelectedCellAction(null);
+  };
+
+  const handleReplaceSelectedRegionCells = () => {
+    if (!mappedPixelData || selectedRegionCells.length === 0 || !selectedRegionReplaceTargetHex) return;
+
+    const targetColor = currentGridColors.find(color => (
+      color.color.toUpperCase() === selectedRegionReplaceTargetHex.toUpperCase()
+    ));
+    if (!targetColor) return;
+
+    const newPixelData = mappedPixelData.map(rowData => rowData.map(cell => ({ ...cell })));
+    let changed = false;
+
+    selectedRegionCells.forEach(({ row, col }) => {
+      const cell = newPixelData[row]?.[col];
+      if (!cell || cell.isExternal || cell.key === TRANSPARENT_KEY) return;
+
+      if (cell.color.toUpperCase() !== targetColor.color.toUpperCase()) {
+        newPixelData[row][col] = {
+          key: targetColor.key,
+          color: targetColor.color,
+          isExternal: false,
+        };
         changed = true;
       }
     });
@@ -3186,7 +3239,7 @@ export default function Home() {
              <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-700 dark:bg-gray-800">
                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                  <div>
-                   <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">区域删除</div>
+                   <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">区域编辑</div>
                    <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
                      选择工具后，在图纸上拖动框选或圈选色块，移动端可直接用手指拖动
                    </div>
@@ -3200,7 +3253,7 @@ export default function Home() {
                          : 'border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600'
                      }`}
                    >
-                     框选删除
+                     框选区域
                    </button>
                    <button
                      onClick={() => handleRegionSelectionModeChange('lasso')}
@@ -3210,14 +3263,14 @@ export default function Home() {
                          : 'border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600'
                      }`}
                    >
-                     圈选删除
+                     圈选区域
                    </button>
                  </div>
                </div>
                {regionSelectionMode !== 'none' && (
                  <div className="mt-3 flex flex-col gap-3 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-200 sm:flex-row sm:items-center sm:justify-between">
                    <span>
-                     当前为{regionSelectionMode === 'rectangle' ? '框选' : '圈选'}模式，选中色块后再确认删除
+                     当前为{regionSelectionMode === 'rectangle' ? '框选' : '圈选'}模式，拖动选择色块后可批量删除或替换
                    </span>
                    <button
                      onClick={resetRegionSelection}
@@ -3271,7 +3324,7 @@ export default function Home() {
                     已选中 {selectedRegionCells.length} 个色块
                   </div>
                   <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    可继续拖动画布重新选择，或确认删除选区
+                    可继续拖动画布重新选择，或批量删除、替换选区
                   </div>
                 </div>
                 <button
@@ -3286,7 +3339,10 @@ export default function Home() {
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <button
-                  onClick={() => setSelectedRegionCells([])}
+                  onClick={() => {
+                    setSelectedRegionCells([]);
+                    setSelectedRegionReplaceTargetHex('');
+                  }}
                   className="min-h-11 rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
                 >
                   清空选区
@@ -3298,6 +3354,34 @@ export default function Home() {
                   删除选中色块
                 </button>
               </div>
+              {currentGridColors.length > 0 && (
+                <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/70">
+                  <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300">
+                    替换选区为
+                  </label>
+                  <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                    <select
+                      value={selectedRegionReplaceTargetHex}
+                      onChange={(event) => setSelectedRegionReplaceTargetHex(event.target.value)}
+                      className="h-10 min-w-0 rounded-md border border-gray-300 bg-white px-2 text-sm font-semibold text-gray-800 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                    >
+                      {currentGridColors.map(color => (
+                        <option key={color.color} value={color.color.toUpperCase()}>
+                          {color.key} {color.color.toUpperCase()}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handleReplaceSelectedRegionCells}
+                      disabled={!selectedRegionReplaceTargetHex}
+                      className="min-h-10 rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      替换
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
          )}
 
@@ -3625,7 +3709,7 @@ export default function Home() {
                       : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700'
                   }`}
                 >
-                  框选删除
+                  框选区域
                 </button>
                 <button
                   type="button"
@@ -3636,7 +3720,7 @@ export default function Home() {
                       : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700'
                   }`}
                 >
-                  圈选删除
+                  圈选区域
                 </button>
                 <button
                   type="button"
@@ -3759,7 +3843,7 @@ export default function Home() {
                     : 'border border-white/20 bg-white/10 text-white hover:bg-white/15'
                 }`}
               >
-                框选删除
+                框选区域
               </button>
               <button
                 type="button"
@@ -3770,7 +3854,7 @@ export default function Home() {
                     : 'border border-white/20 bg-white/10 text-white hover:bg-white/15'
                 }`}
               >
-                圈选删除
+                圈选区域
               </button>
               <button
                 type="button"

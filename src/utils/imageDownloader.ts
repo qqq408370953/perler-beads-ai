@@ -212,16 +212,9 @@ interface DownloadImageParams {
 
 export interface DownloadImagePreviewResult {
   imageUrl: string;
+  dataURL: string;
   blob: Blob;
   filename: string;
-}
-
-function getDownloadCellSize(N: number, M: number): number {
-  const maxGridSide = 7200;
-  const largestSide = Math.max(N, M);
-  if (largestSide <= 0) return 30;
-
-  return Math.max(8, Math.min(30, Math.floor(maxGridSide / largestSide)));
 }
 
 function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
@@ -236,11 +229,25 @@ function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   });
 }
 
-function triggerBrowserDownload(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+      } else {
+        reject(new Error('图片转换失败'));
+      }
+    };
+    reader.onerror = () => reject(new Error('图片读取失败'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function triggerDataUrlDownload(dataURL: string, filename: string): void {
   const link = document.createElement('a');
 
-  link.href = url;
+  link.href = dataURL;
   link.download = filename;
   link.rel = 'noopener';
   link.style.display = 'none';
@@ -248,8 +255,6 @@ function triggerBrowserDownload(blob: Blob, filename: string): void {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-
-  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 export function releaseDownloadImagePreviewUrl(imageUrl?: string | null): void {
@@ -259,7 +264,8 @@ export function releaseDownloadImagePreviewUrl(imageUrl?: string | null): void {
 }
 
 export async function saveImageBlob(blob: Blob, filename: string): Promise<void> {
-  triggerBrowserDownload(blob, filename);
+  const dataURL = await blobToDataURL(blob);
+  triggerDataUrlDownload(dataURL, filename);
 }
 
 // 生成最终图纸图片，用于预览或下载
@@ -286,7 +292,7 @@ export async function generateDownloadImagePreview({
   // 主要下载处理函数
   const processDownload = async (): Promise<DownloadImagePreviewResult | null> => {
     const { N, M } = gridDimensions; // 此时已确保gridDimensions不为null
-    const downloadCellSize = getDownloadCellSize(N, M);
+    const downloadCellSize = 30;
   
     // 从下载选项中获取设置
     const { showGrid, gridInterval, showCoordinates, gridLineColor, includeStats, showCellNumbers = true } = options;
@@ -662,11 +668,11 @@ export async function generateDownloadImagePreview({
 
     try {
       const blob = await canvasToPngBlob(downloadCanvas);
-      const imageUrl = URL.createObjectURL(blob);
+      const dataURL = downloadCanvas.toDataURL('image/png');
       const filename = showCellNumbers
         ? `bead-grid-${N}x${M}-keys-palette_${selectedColorSystem}.png`
         : `bead-grid-${N}x${M}-pixel-palette_${selectedColorSystem}.png`;
-      return { imageUrl, blob, filename };
+      return { imageUrl: dataURL, dataURL, blob, filename };
     } catch (e) {
       console.error("生成图纸失败:", e);
       alert("无法生成图纸。");
@@ -682,7 +688,7 @@ export async function downloadImage(params: DownloadImageParams): Promise<void> 
   if (!result) return;
 
   try {
-    await saveImageBlob(result.blob, result.filename);
+    triggerDataUrlDownload(result.dataURL, result.filename);
     releaseDownloadImagePreviewUrl(result.imageUrl);
     console.log("Grid image download initiated.");
 

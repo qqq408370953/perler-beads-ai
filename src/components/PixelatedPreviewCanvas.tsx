@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useEffect, TouchEvent, MouseEvent, useMemo, useState } from 'react';
+import React, { useRef, useEffect, TouchEvent, MouseEvent, PointerEvent, useMemo, useState } from 'react';
 import { MappedPixel } from '../utils/pixelation';
 import { TRANSPARENT_KEY } from '../utils/pixelEditingUtils';
 import { GridDownloadOptions } from '../types/downloadTypes';
@@ -738,6 +738,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
   const [darkModeState, setDarkModeState] = useState<boolean | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number; pageX: number; pageY: number } | null>(null);
   const touchMovedRef = useRef<boolean>(false);
+  const activeRegionPointerIdRef = useRef<number | null>(null);
   const [isHighlighting, setIsHighlighting] = useState(false);
   const [isSelectingRegion, setIsSelectingRegion] = useState(false);
   const [selectionStart, setSelectionStart] = useState<CanvasPoint | null>(null);
@@ -950,10 +951,40 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
     setLassoPoints([]);
   };
 
+  const supportsPointerEvents = () => typeof window !== 'undefined' && 'PointerEvent' in window;
+
+  const handlePointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (!isRegionSelectionActive) return;
+
+    event.preventDefault();
+    activeRegionPointerIdRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    startRegionSelection(event.clientX, event.clientY);
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (!isRegionSelectionActive || activeRegionPointerIdRef.current !== event.pointerId) return;
+
+    event.preventDefault();
+    moveRegionSelection(event.clientX, event.clientY);
+  };
+
+  const handlePointerUp = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (!isRegionSelectionActive || activeRegionPointerIdRef.current !== event.pointerId) return;
+
+    event.preventDefault();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    activeRegionPointerIdRef.current = null;
+    finishRegionSelection();
+  };
+
   // --- 鼠标事件处理 ---
   const handleMouseDown = (event: MouseEvent<HTMLCanvasElement>) => {
     if (!isRegionSelectionActive) return;
     event.preventDefault();
+    if (supportsPointerEvents()) return;
     startRegionSelection(event.clientX, event.clientY);
   };
   
@@ -961,6 +992,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
   const handleMouseMove = (event: MouseEvent<HTMLCanvasElement>) => {
     if (isRegionSelectionActive) {
       if (isSelectingRegion) {
+        if (supportsPointerEvents()) return;
         moveRegionSelection(event.clientX, event.clientY);
       }
       return;
@@ -974,6 +1006,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
 
   const handleMouseUp = () => {
     if (isRegionSelectionActive) {
+      if (supportsPointerEvents()) return;
       finishRegionSelection();
     }
   };
@@ -982,6 +1015,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
   const handleMouseLeave = () => {
     if (isRegionSelectionActive) {
       if (isSelectingRegion) {
+        if (supportsPointerEvents()) return;
         finishRegionSelection();
       }
       return;
@@ -1012,6 +1046,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
 
     if (isRegionSelectionActive) {
       event.preventDefault();
+      if (supportsPointerEvents()) return;
       startRegionSelection(touch.clientX, touch.clientY);
       return;
     }
@@ -1039,6 +1074,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
 
     if (isRegionSelectionActive) {
       event.preventDefault();
+      if (supportsPointerEvents()) return;
       moveRegionSelection(touch.clientX, touch.clientY);
       return;
     }
@@ -1060,6 +1096,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
   // 触摸结束时不再自动隐藏提示框
   const handleTouchEnd = () => {
     if (isRegionSelectionActive) {
+      if (supportsPointerEvents()) return;
       finishRegionSelection();
       return;
     }
@@ -1084,6 +1121,10 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseLeave}
       onClick={handleClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
