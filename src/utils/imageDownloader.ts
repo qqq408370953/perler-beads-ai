@@ -1,6 +1,6 @@
 import { GridDownloadOptions } from '../types/downloadTypes';
 import { MappedPixel, PaletteColor } from './pixelation';
-import { getDisplayColorKey, getColorKeyByHex, ColorSystem } from './colorSystemUtils';
+import { getMappedColorDisplayKey, getColorKeyByHex, ColorSystem } from './colorSystemUtils';
 
 // 用于获取对比色的工具函数 - 从page.tsx复制
 function getContrastColor(hex: string): string {
@@ -203,7 +203,7 @@ export function importCsvData(file: File): Promise<{
 interface DownloadImageParams {
   mappedPixelData: MappedPixel[][] | null;
   gridDimensions: { N: number; M: number } | null;
-  colorCounts: { [key: string]: { count: number; color: string } } | null;
+  colorCounts: { [key: string]: { count: number; color: string; displayKey?: string } } | null;
   totalBeadCount: number;
   options: GridDownloadOptions;
   activeBeadPalette: PaletteColor[];
@@ -485,7 +485,7 @@ export async function generateDownloadImagePreview({
           ctx.fillRect(drawX, drawY, downloadCellSize, downloadCellSize);
 
           if (showCellNumbers) {
-            const cellKey = getDisplayColorKey(cellData.color || '#FFFFFF', selectedColorSystem);
+            const cellKey = getMappedColorDisplayKey(cellData.color || '#FFFFFF', selectedColorSystem, cellData.key);
             ctx.fillStyle = getContrastColor(cellColor);
             ctx.fillText(cellKey, drawX + downloadCellSize / 2, drawY + downloadCellSize / 2);
           }
@@ -606,7 +606,7 @@ export async function generateDownloadImagePreview({
         // 绘制色号
         ctx.fillStyle = '#333333';
         ctx.textAlign = 'left';
-        ctx.fillText(getColorKeyByHex(key, selectedColorSystem), itemX + swatchSize + 5, rowY);
+        ctx.fillText(cellData.displayKey ?? getColorKeyByHex(key, selectedColorSystem), itemX + swatchSize + 5, rowY);
         
         // 绘制数量 - 在每个项目的右侧
         const countText = `${cellData.count} 颗`;

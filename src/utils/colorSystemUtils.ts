@@ -117,6 +117,22 @@ export function getColorKeyByHex(hexValue: string, colorSystem: ColorSystem): st
   return '?';
 }
 
+export function isCustomColorKey(key?: string): boolean {
+  return /^U\d{2,}$/i.test(key ?? '');
+}
+
+export function getMappedColorDisplayKey(
+  hexValue: string,
+  colorSystem: ColorSystem,
+  sourceKey?: string
+): string {
+  if (isCustomColorKey(sourceKey)) {
+    return sourceKey!.toUpperCase();
+  }
+
+  return getDisplayColorKey(hexValue, colorSystem);
+}
+
 // 将hex颜色转换为HSL
 function hexToHsl(hex: string): { h: number; s: number; l: number } {
   // 移除 # 符号
@@ -173,4 +189,4 @@ export function sortColorsByHue<T extends { color: string }>(colors: T[]): T[] {
     // 明度也相近时，按饱和度排序（高饱和度在前，让鲜艳的颜色更突出）
     return hslB.s - hslA.s;
   });
-} 
+}

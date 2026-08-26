@@ -31,7 +31,9 @@ import {
   colorSystemOptions, 
   convertPaletteToColorSystem, 
   getColorKeyByHex,
+  getMappedColorDisplayKey,
   getMardToHexMapping,
+  isCustomColorKey,
   sortColorsByHue,
   ColorSystem 
 } from '../utils/colorSystemUtils';
@@ -89,6 +91,19 @@ const fullBeadPalette: PaletteColor[] = Object.entries(mardToHexMapping)
 // ++ Add definition for background color keys ++
 const DEFAULT_GRANULARITY = 85;
 
+type ColorCountMap = {
+  [hexKey: string]: {
+    count: number;
+    color: string;
+    displayKey?: string;
+  };
+};
+
+type CustomGridColor = {
+  key: string;
+  color: string;
+};
+
 // 1. 导入新组件
 import PixelatedPreviewCanvas, { RegionSelectionCell, RegionSelectionMode } from '../components/PixelatedPreviewCanvas';
 import GridTooltip from '../components/GridTooltip';
@@ -134,11 +149,11 @@ export default function Home() {
   const [initialGridColorKeys, setInitialGridColorKeys] = useState<Set<string>>(new Set());
   const [mappedPixelData, setMappedPixelData] = useState<MappedPixel[][] | null>(null);
   const [gridDimensions, setGridDimensions] = useState<{ N: number; M: number } | null>(null);
-  const [colorCounts, setColorCounts] = useState<{ [key: string]: { count: number; color: string } } | null>(null);
+  const [colorCounts, setColorCounts] = useState<ColorCountMap | null>(null);
   const [totalBeadCount, setTotalBeadCount] = useState<number>(0);
   const [editHistory, setEditHistory] = useState<Array<{
     mappedPixelData: MappedPixel[][];
-    colorCounts: { [key: string]: { count: number; color: string } } | null;
+    colorCounts: ColorCountMap | null;
     totalBeadCount: number;
     initialGridColorKeys: string[];
   }>>([]);
@@ -158,6 +173,8 @@ export default function Home() {
   const [selectedRegionCells, setSelectedRegionCells] = useState<RegionSelectionCell[]>([]);
   const [selectedRegionReplaceTargetHex, setSelectedRegionReplaceTargetHex] = useState<string>('');
   const [isRegionColorPickerOpen, setIsRegionColorPickerOpen] = useState<boolean>(false);
+  const [customGridColors, setCustomGridColors] = useState<CustomGridColor[]>([]);
+  const [customRegionColorHex, setCustomRegionColorHex] = useState<string>('#FFFFFF');
   const [remapTrigger, setRemapTrigger] = useState<number>(0);
   const [isManualColoringMode, setIsManualColoringMode] = useState<boolean>(false);
   const [selectedColor, setSelectedColor] = useState<MappedPixel | null>(null);
@@ -352,16 +369,30 @@ export default function Home() {
     const originalColors = Array.from(uniqueColorsMap.values());
     
     const colorData = originalColors.map(color => {
-      const displayKey = getColorKeyByHex(color.color.toUpperCase(), selectedColorSystem);
+      const displayKey = getMappedColorDisplayKey(color.color.toUpperCase(), selectedColorSystem, color.key);
       return {
         key: displayKey,
         color: color.color
       };
     });
 
+    customGridColors.forEach(color => {
+      const colorHex = color.color.toUpperCase();
+      if (!colorData.some(item => item.color.toUpperCase() === colorHex)) {
+        colorData.push({ key: color.key, color: colorHex });
+      }
+    });
+
     // 使用色相排序而不是色号排序
     return sortColorsByHue(colorData);
-  }, [mappedPixelData, selectedColorSystem]);
+  }, [customGridColors, mappedPixelData, selectedColorSystem]);
+
+  useEffect(() => {
+    if (!mappedPixelData) {
+      setCustomGridColors([]);
+      setCustomRegionColorHex('#FFFFFF');
+    }
+  }, [mappedPixelData]);
 
   useEffect(() => {
     if (!selectedCellAction) {
@@ -398,6 +429,61 @@ export default function Home() {
       color.color.toUpperCase() === selectedRegionReplaceTargetHex.toUpperCase()
     )) ?? null;
   }, [currentGridColors, selectedRegionReplaceTargetHex]);
+
+  const normalizeCustomColorHex = (value: string): string | null => {
+    const trimmedValue = value.trim();
+    const normalizedValue = trimmedValue.startsWith('#') ? trimmedValue : `#${trimmedValue}`;
+
+    if (!/^#[0-9A-Fa-f]{6}$/.test(normalizedValue)) {
+      return null;
+    }
+
+    return normalizedValue.toUpperCase();
+  };
+
+  const getNextCustomGridColorKey = (colors: CustomGridColor[]): string => {
+    const usedNumbers = colors
+      .map(color => color.key.match(/^U(\d+)$/i)?.[1])
+      .filter((value): value is string => Boolean(value))
+      .map(value => Number(value));
+
+    let nextNumber = 1;
+    while (usedNumbers.includes(nextNumber)) {
+      nextNumber++;
+    }
+
+    return `U${String(nextNumber).padStart(2, '0')}`;
+  };
+
+  const handleUseCustomRegionColor = () => {
+    const normalizedHex = normalizeCustomColorHex(customRegionColorHex);
+    if (!normalizedHex) {
+      alert('请输入有效的 HEX 颜色，例如 #FFAA00。');
+      return;
+    }
+
+    const existingColor = currentGridColors.find(color => color.color.toUpperCase() === normalizedHex);
+    if (existingColor) {
+      setSelectedRegionReplaceTargetHex(existingColor.color.toUpperCase());
+      setIsRegionColorPickerOpen(false);
+      return;
+    }
+
+    setCustomGridColors(currentColors => {
+      const existingCustomColor = currentColors.find(color => color.color.toUpperCase() === normalizedHex);
+      if (existingCustomColor) return currentColors;
+
+      return [
+        ...currentColors,
+        {
+          key: getNextCustomGridColorKey(currentColors),
+          color: normalizedHex,
+        },
+      ];
+    });
+    setSelectedRegionReplaceTargetHex(normalizedHex);
+    setIsRegionColorPickerOpen(false);
+  };
 
   const hasUsablePattern = Boolean(
     mappedPixelData &&
@@ -693,7 +779,7 @@ export default function Home() {
           setOriginalImageSrc(null); // CSV导入时没有原始图片
           
           // 计算颜色统计
-          const colorCountsMap: { [key: string]: { count: number; color: string } } = {};
+          const colorCountsMap: ColorCountMap = {};
           let totalCount = 0;
           
           mappedPixelData.forEach(row => {
@@ -1212,14 +1298,20 @@ export default function Home() {
         setMappedPixelData(finalPixelData);
         setGridDimensions({ N, M });
 
-        const counts: { [key: string]: { count: number; color: string } } = {};
+        const counts: ColorCountMap = {};
         let totalCount = 0;
         finalPixelData.flat().forEach(cell => {
           if (cell && cell.key && !cell.isExternal) {
             // 使用hex值作为统计键值，而不是色号
             const hexKey = cell.color;
             if (!counts[hexKey]) {
-              counts[hexKey] = { count: 0, color: cell.color };
+              counts[hexKey] = {
+                count: 0,
+                color: cell.color,
+                ...(isCustomColorKey(cell.key) ? { displayKey: cell.key.toUpperCase() } : {}),
+              };
+            } else if (!counts[hexKey].displayKey && isCustomColorKey(cell.key)) {
+              counts[hexKey].displayKey = cell.key.toUpperCase();
             }
             counts[hexKey].count++;
             totalCount++;
@@ -1895,7 +1987,7 @@ export default function Home() {
 
     setMappedPixelData(newPixelData);
 
-    const newColorCounts: { [hexKey: string]: { count: number; color: string } } = {};
+    const newColorCounts: ColorCountMap = {};
     let newTotalCount = 0;
 
     newPixelData.flat().forEach(cell => {
@@ -1904,8 +1996,11 @@ export default function Home() {
         if (!newColorCounts[cellHex]) {
           newColorCounts[cellHex] = {
             count: 0,
-            color: cellHex
+            color: cellHex,
+            ...(isCustomColorKey(cell.key) ? { displayKey: cell.key.toUpperCase() } : {}),
           };
+        } else if (!newColorCounts[cellHex].displayKey && isCustomColorKey(cell.key)) {
+          newColorCounts[cellHex].displayKey = cell.key.toUpperCase();
         }
         newColorCounts[cellHex].count++;
         newTotalCount++;
@@ -3092,7 +3187,7 @@ export default function Home() {
                 .sort(sortColorKeys)
                 .map((hexKey) => {
                   // 现在key是hex值，需要通过hex获取对应色号系统的色号
-                  const displayColorKey = getColorKeyByHex(hexKey, selectedColorSystem);
+                  const displayColorKey = colorCounts[hexKey].displayKey ?? getColorKeyByHex(hexKey, selectedColorSystem);
                   const isExcluded = excludedColorKeys.has(hexKey);
                   const count = colorCounts[hexKey].count;
                   const colorHex = colorCounts[hexKey].color;
@@ -3156,7 +3251,7 @@ export default function Home() {
                                       className="inline-block w-4 h-4 rounded border border-gray-400 dark:border-gray-500 flex-shrink-0"
                                       style={{ backgroundColor: colorData?.hex || hexKey }}
                                     ></span>
-                                    <span className="font-mono text-xs text-gray-800 dark:text-gray-200">{getColorKeyByHex(hexKey, selectedColorSystem)}</span>
+                                    <span className="font-mono text-xs text-gray-800 dark:text-gray-200">{colorCounts[hexKey]?.displayKey ?? getColorKeyByHex(hexKey, selectedColorSystem)}</span>
                                   </div>
                                   <button
                                     onClick={() => {
@@ -3393,38 +3488,76 @@ export default function Home() {
                         </svg>
                       </button>
                       {isRegionColorPickerOpen && (
-                        <div className="absolute bottom-full left-0 z-50 mb-2 max-h-64 w-full overflow-y-auto rounded-lg border border-gray-200 bg-white p-1 shadow-xl dark:border-gray-700 dark:bg-gray-900">
-                          {currentGridColors.map(color => {
-                            const colorHex = color.color.toUpperCase();
-                            const isSelectedTarget = colorHex === selectedRegionReplaceTargetHex.toUpperCase();
+                        <div className="absolute bottom-full left-0 z-50 mb-2 max-h-80 w-full overflow-y-auto rounded-lg border border-gray-200 bg-white p-1 shadow-xl dark:border-gray-700 dark:bg-gray-900">
+                          <div className="max-h-44 overflow-y-auto">
+                            {currentGridColors.map(color => {
+                              const colorHex = color.color.toUpperCase();
+                              const isSelectedTarget = colorHex === selectedRegionReplaceTargetHex.toUpperCase();
 
-                            return (
-                              <button
-                                key={color.color}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedRegionReplaceTargetHex(colorHex);
-                                  setIsRegionColorPickerOpen(false);
+                              return (
+                                <button
+                                  key={color.color}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedRegionReplaceTargetHex(colorHex);
+                                    setIsRegionColorPickerOpen(false);
+                                  }}
+                                  className={`flex min-h-10 w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${
+                                    isSelectedTarget
+                                      ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-200'
+                                      : 'text-gray-800 hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-800'
+                                  }`}
+                                >
+                                  <span
+                                    className="h-6 w-6 shrink-0 rounded border border-gray-300 shadow-inner dark:border-gray-600"
+                                    style={{ backgroundColor: color.color }}
+                                  />
+                                  <span className="min-w-0 flex-1 truncate font-semibold">
+                                    {color.key}
+                                  </span>
+                                  <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+                                    {colorHex}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="mt-1 border-t border-gray-200 p-2 dark:border-gray-700">
+                            <div className="mb-2 text-xs font-semibold text-gray-500 dark:text-gray-400">
+                              自定义颜色
+                            </div>
+                            <div className="grid grid-cols-[auto_1fr] items-center gap-2">
+                              <input
+                                type="color"
+                                value={normalizeCustomColorHex(customRegionColorHex) ?? '#FFFFFF'}
+                                onChange={(event) => setCustomRegionColorHex(event.target.value.toUpperCase())}
+                                className="h-10 w-10 cursor-pointer rounded border border-gray-300 bg-white p-1 dark:border-gray-600 dark:bg-gray-900"
+                                aria-label="选择自定义颜色"
+                              />
+                              <input
+                                type="text"
+                                value={customRegionColorHex}
+                                onChange={(event) => setCustomRegionColorHex(event.target.value)}
+                                onBlur={() => {
+                                  const normalizedHex = normalizeCustomColorHex(customRegionColorHex);
+                                  if (normalizedHex) setCustomRegionColorHex(normalizedHex);
                                 }}
-                                className={`flex min-h-10 w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${
-                                  isSelectedTarget
-                                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-200'
-                                    : 'text-gray-800 hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-800'
-                                }`}
-                              >
-                                <span
-                                  className="h-6 w-6 shrink-0 rounded border border-gray-300 shadow-inner dark:border-gray-600"
-                                  style={{ backgroundColor: color.color }}
-                                />
-                                <span className="min-w-0 flex-1 truncate font-semibold">
-                                  {color.key}
-                                </span>
-                                <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
-                                  {colorHex}
-                                </span>
-                              </button>
-                            );
-                          })}
+                                placeholder="#FFAA00"
+                                className="h-10 min-w-0 rounded-md border border-gray-300 bg-white px-2 font-mono text-sm font-semibold text-gray-800 dark:border-gray-600 dark:bg-gray-950 dark:text-gray-100"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleUseCustomRegionColor}
+                              className="mt-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700 transition-colors hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200 dark:hover:bg-blue-950/70"
+                            >
+                              <span
+                                className="h-5 w-5 rounded border border-gray-300 shadow-inner dark:border-gray-600"
+                                style={{ backgroundColor: normalizeCustomColorHex(customRegionColorHex) ?? '#FFFFFF' }}
+                              />
+                              使用该颜色
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -3454,7 +3587,7 @@ export default function Home() {
                 />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                    {getColorKeyByHex(selectedCellAction.color, selectedColorSystem)}
+                    {getMappedColorDisplayKey(selectedCellAction.color, selectedColorSystem, selectedCellAction.key)}
                   </div>
                   <div className="mt-0.5 break-all text-xs text-gray-500 dark:text-gray-400">
                     {selectedCellAction.color.toUpperCase()}

@@ -4,7 +4,7 @@ import React, { useRef, useEffect, TouchEvent, MouseEvent, PointerEvent, useMemo
 import { MappedPixel } from '../utils/pixelation';
 import { TRANSPARENT_KEY } from '../utils/pixelEditingUtils';
 import { GridDownloadOptions } from '../types/downloadTypes';
-import { ColorSystem, getDisplayColorKey } from '../utils/colorSystemUtils';
+import { ColorSystem, getDisplayColorKey, getMappedColorDisplayKey } from '../utils/colorSystemUtils';
 
 export type RegionSelectionMode = 'none' | 'rectangle' | 'lasso';
 
@@ -39,7 +39,7 @@ interface PixelatedPreviewCanvasProps {
   displayScale?: number;
   renderMode?: 'editor' | 'pattern';
   downloadOptions?: GridDownloadOptions;
-  colorCounts?: { [key: string]: { count: number; color: string } } | null;
+  colorCounts?: { [key: string]: { count: number; color: string; displayKey?: string } } | null;
   totalBeadCount?: number;
   selectedColorSystem?: ColorSystem;
 }
@@ -185,7 +185,7 @@ const getPatternCellSize = (N: number, M: number): number => {
 const getPatternCanvasLayout = (
   dims: { N: number; M: number },
   options?: GridDownloadOptions,
-  colorCounts?: { [key: string]: { count: number; color: string } } | null
+  colorCounts?: { [key: string]: { count: number; color: string; displayKey?: string } } | null
 ): PatternCanvasLayout => {
   const { N, M } = dims;
   const showCoordinates = options?.showCoordinates ?? true;
@@ -474,7 +474,7 @@ const drawPatternCanvas = (
   dims: { N: number; M: number },
   layout: PatternCanvasLayout,
   options: GridDownloadOptions | undefined,
-  colorCounts: { [key: string]: { count: number; color: string } } | null | undefined,
+  colorCounts: { [key: string]: { count: number; color: string; displayKey?: string } } | null | undefined,
   totalBeadCount: number | undefined,
   selectedColorSystem: ColorSystem,
   selectedCells: RegionSelectionCell[] = [],
@@ -577,7 +577,7 @@ const drawPatternCanvas = (
         if (showCellNumbers) {
           ctx.fillStyle = getContrastColor(cellColor);
           ctx.fillText(
-            getDisplayColorKey(cellColor, selectedColorSystem),
+            getMappedColorDisplayKey(cellColor, selectedColorSystem, cellData.key),
             drawX + cellSize / 2,
             drawY + cellSize / 2
           );
@@ -686,7 +686,7 @@ const drawPatternCanvas = (
       const y = layout.statsY + row * 44;
       const item = colorCounts[key];
       const color = item.color || key;
-      const label = getDisplayColorKey(color, selectedColorSystem);
+      const label = item.displayKey ?? getDisplayColorKey(color, selectedColorSystem);
 
       ctx.fillStyle = color;
       ctx.fillRect(x, y, swatchSize, swatchSize);
