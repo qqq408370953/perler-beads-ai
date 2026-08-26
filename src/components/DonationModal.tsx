@@ -37,9 +37,6 @@ const DonationModal: React.FC<DonationModalProps> = ({ isOpen, onClose }) => {
             </button>
           </div>
           <div className="text-center">
-            <p className="mb-3 text-sm sm:text-base text-gray-600 dark:text-gray-300 break-words">
-              开源项目是把作者和用户紧紧联系在一起的社群，如果您希望这个项目继续发展，可以请作者喝一杯奶茶。
-            </p>
             <p className="mb-4 sm:mb-6 text-sm sm:text-base text-gray-600 dark:text-gray-300 break-words">
               您的支持是作者把项目继续下去的动力。
             </p>

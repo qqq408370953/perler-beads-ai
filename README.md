@@ -334,7 +334,7 @@ npx wrangler pages deploy out --project-name perler-beads
 
 1. 在 **Settings** → **Environment Variables** 中添加：
    - 变量名：`NEXT_PUBLIC_OFFICIAL_DOMAIN`
-   - 变量值：`https://你的域名/`（例如 `https://liang.348349.xyz/`）
+   - 变量值：`https://你的域名/`（例如 `https://example.com/`）
 
 2. 重新构建并部署（因为 `NEXT_PUBLIC_*` 变量在构建时注入）：
    ```bash
@@ -389,7 +389,7 @@ git push -u origin main
 |--------|------|---------|
 | `VOLC_ACCESS_KEY_ID` | 火山引擎 Access Key ID | AI 功能必须 |
 | `VOLC_SECRET_ACCESS_KEY` | 火山引擎 Secret Access Key | AI 功能必须 |
-| `NEXT_PUBLIC_OFFICIAL_DOMAIN` | 官方域名（如 `https://liang.348349.xyz/`） | 可选 |
+| `NEXT_PUBLIC_OFFICIAL_DOMAIN` | 官方域名（如 `https://example.com/`） | 可选 |
 
 > **重要**：`NEXT_PUBLIC_OFFICIAL_DOMAIN` 是构建时变量，修改后需要重新触发构建（在 Deployments 页面点击 Retry deployment）。
 

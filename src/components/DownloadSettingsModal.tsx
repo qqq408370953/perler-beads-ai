@@ -3,6 +3,7 @@ import { GridDownloadOptions } from '../types/downloadTypes';
 
 // 定义可选的网格线颜色
 const gridLineColorOptions = [
+  { name: '黑色', value: '#111111' },
   { name: '深灰色', value: '#555555' },
   { name: '红色', value: '#FF0000' },
   { name: '蓝色', value: '#0000FF' },

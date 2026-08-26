@@ -3,6 +3,8 @@
 import React, { useRef, useEffect, TouchEvent, MouseEvent, useMemo, useState } from 'react';
 import { MappedPixel } from '../utils/pixelation';
 import { TRANSPARENT_KEY } from '../utils/pixelEditingUtils';
+import { GridDownloadOptions } from '../types/downloadTypes';
+import { ColorSystem, getDisplayColorKey } from '../utils/colorSystemUtils';
 
 export type RegionSelectionMode = 'none' | 'rectangle' | 'lasso';
 
@@ -34,6 +36,33 @@ interface PixelatedPreviewCanvasProps {
   selectionMode?: RegionSelectionMode;
   selectedRegionCells?: RegionSelectionCell[];
   onRegionSelectionComplete?: (cells: RegionSelectionCell[]) => void;
+  displayScale?: number;
+  renderMode?: 'editor' | 'pattern';
+  downloadOptions?: GridDownloadOptions;
+  colorCounts?: { [key: string]: { count: number; color: string } } | null;
+  totalBeadCount?: number;
+  selectedColorSystem?: ColorSystem;
+}
+
+interface GridMetrics {
+  originX: number;
+  originY: number;
+  cellWidth: number;
+  cellHeight: number;
+  gridWidth: number;
+  gridHeight: number;
+}
+
+interface PatternCanvasLayout extends GridMetrics {
+  width: number;
+  height: number;
+  axisLabelSize: number;
+  topAxisY: number;
+  bottomAxisY: number;
+  leftAxisX: number;
+  rightAxisX: number;
+  statsY: number;
+  statsHeight: number;
 }
 
 const isSelectableCell = (cell: MappedPixel | undefined) => {
@@ -55,6 +84,160 @@ const getCanvasPoint = (
   };
 };
 
+const getGridMetrics = (canvas: HTMLCanvasElement, dims: { N: number; M: number }): GridMetrics => {
+  const originX = Number(canvas.dataset.gridOriginX ?? 0);
+  const originY = Number(canvas.dataset.gridOriginY ?? 0);
+  const cellWidth = Number(canvas.dataset.gridCellWidth ?? canvas.width / dims.N);
+  const cellHeight = Number(canvas.dataset.gridCellHeight ?? canvas.height / dims.M);
+
+  return {
+    originX,
+    originY,
+    cellWidth,
+    cellHeight,
+    gridWidth: cellWidth * dims.N,
+    gridHeight: cellHeight * dims.M,
+  };
+};
+
+const setCanvasGridMetrics = (canvas: HTMLCanvasElement, metrics: GridMetrics) => {
+  canvas.dataset.gridOriginX = String(metrics.originX);
+  canvas.dataset.gridOriginY = String(metrics.originY);
+  canvas.dataset.gridCellWidth = String(metrics.cellWidth);
+  canvas.dataset.gridCellHeight = String(metrics.cellHeight);
+};
+
+const getCellFromPoint = (
+  point: CanvasPoint,
+  canvas: HTMLCanvasElement,
+  dims: { N: number; M: number }
+) => {
+  const metrics = getGridMetrics(canvas, dims);
+  const relativeX = point.x - metrics.originX;
+  const relativeY = point.y - metrics.originY;
+
+  if (
+    relativeX < 0 ||
+    relativeY < 0 ||
+    relativeX >= metrics.gridWidth ||
+    relativeY >= metrics.gridHeight
+  ) {
+    return null;
+  }
+
+  return {
+    col: Math.min(dims.N - 1, Math.max(0, Math.floor(relativeX / metrics.cellWidth))),
+    row: Math.min(dims.M - 1, Math.max(0, Math.floor(relativeY / metrics.cellHeight))),
+  };
+};
+
+const getResponsiveCanvasSize = (dims: { N: number; M: number }) => {
+  const baseWidth = 500;
+  const minCellSize = 4;
+  const recommendedCellSize = 6;
+  let outputWidth = baseWidth;
+
+  if (dims.N > 100) {
+    const requiredWidthForMinSize = dims.N * minCellSize;
+    const requiredWidthForRecommendedSize = dims.N * recommendedCellSize;
+    const maxWidth = typeof window !== 'undefined'
+      ? Math.min(1200, window.innerWidth * 0.9)
+      : 1200;
+
+    outputWidth = Math.min(maxWidth, Math.max(baseWidth, requiredWidthForRecommendedSize));
+    outputWidth = Math.max(outputWidth, requiredWidthForMinSize);
+  }
+
+  return {
+    width: Math.round(outputWidth),
+    height: Math.max(1, Math.round(outputWidth * (dims.M / dims.N))),
+  };
+};
+
+const getContrastColor = (hex: string): string => {
+  const normalized = hex.replace('#', '');
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luma > 0.5 ? '#111111' : '#FFFFFF';
+};
+
+const sortColorKeys = (a: string, b: string): number => {
+  const regex = /^([A-Z]+)(\d+)$/;
+  const matchA = a.match(regex);
+  const matchB = b.match(regex);
+
+  if (matchA && matchB) {
+    if (matchA[1] !== matchB[1]) return matchA[1].localeCompare(matchB[1]);
+    return parseInt(matchA[2], 10) - parseInt(matchB[2], 10);
+  }
+
+  return a.localeCompare(b);
+};
+
+const getPatternCellSize = (N: number, M: number): number => {
+  const largestSide = Math.max(N, M);
+  if (largestSide <= 0) return 30;
+  return Math.max(8, Math.min(30, Math.floor(7200 / largestSide)));
+};
+
+const getPatternCanvasLayout = (
+  dims: { N: number; M: number },
+  options?: GridDownloadOptions,
+  colorCounts?: { [key: string]: { count: number; color: string } } | null
+): PatternCanvasLayout => {
+  const { N, M } = dims;
+  const showCoordinates = options?.showCoordinates ?? true;
+  const includeStats = options?.includeStats ?? true;
+  const cellSize = getPatternCellSize(N, M);
+  const axisLabelSize = showCoordinates ? Math.max(cellSize, Math.ceil(cellSize * 1.35), 14) : 0;
+  const statsPadding = 20;
+  const gridWidth = N * cellSize;
+  const gridHeight = M * cellSize;
+  const preCalcWidth = gridWidth + axisLabelSize * 2;
+  const availableWidth = preCalcWidth - statsPadding * 2;
+  const statsFontSize = Math.floor(13 + (Math.max(0, availableWidth - 350) / 600) * 10);
+  const extraLeftMargin = showCoordinates ? Math.max(10, statsFontSize) : 0;
+  const extraRightMargin = showCoordinates ? Math.max(10, statsFontSize) : 0;
+  const extraTopMargin = showCoordinates ? Math.max(8, Math.floor(statsFontSize * 0.8)) : 0;
+  const extraBottomMargin = showCoordinates ? Math.max(8, Math.floor(statsFontSize * 0.8)) : 0;
+  let statsHeight = 0;
+
+  if (includeStats && colorCounts && Object.keys(colorCounts).length > 0) {
+    const numColumns = Math.max(1, Math.min(8, Math.floor(availableWidth / 120)));
+    const numRows = Math.ceil(Object.keys(colorCounts).length / numColumns);
+    statsHeight = 24 + Math.max(44, numRows * 44) + 58;
+  }
+
+  const width = gridWidth + axisLabelSize * 2 + extraLeftMargin + extraRightMargin;
+  const originX = extraLeftMargin + axisLabelSize;
+  const topAxisY = extraTopMargin;
+  const originY = extraTopMargin + axisLabelSize;
+  const bottomAxisY = originY + gridHeight;
+  const leftAxisX = extraLeftMargin;
+  const rightAxisX = originX + gridWidth;
+  const statsY = bottomAxisY + axisLabelSize + 24;
+
+  return {
+    width,
+    height: originY + gridHeight + axisLabelSize + statsHeight + extraBottomMargin,
+    originX,
+    originY,
+    cellWidth: cellSize,
+    cellHeight: cellSize,
+    gridWidth,
+    gridHeight,
+    axisLabelSize,
+    topAxisY,
+    bottomAxisY,
+    leftAxisX,
+    rightAxisX,
+    statsY,
+    statsHeight,
+  };
+};
+
 const getCellsInRectangle = (
   start: CanvasPoint,
   current: CanvasPoint,
@@ -62,17 +245,22 @@ const getCellsInRectangle = (
   dims: { N: number; M: number },
   data: MappedPixel[][]
 ): RegionSelectionCell[] => {
-  const cellWidth = canvas.width / dims.N;
-  const cellHeight = canvas.height / dims.M;
+  const metrics = getGridMetrics(canvas, dims);
   const minX = Math.min(start.x, current.x);
   const maxX = Math.max(start.x, current.x);
   const minY = Math.min(start.y, current.y);
   const maxY = Math.max(start.y, current.y);
+  const selectionMinX = Math.max(metrics.originX, minX);
+  const selectionMaxX = Math.min(metrics.originX + metrics.gridWidth, maxX);
+  const selectionMinY = Math.max(metrics.originY, minY);
+  const selectionMaxY = Math.min(metrics.originY + metrics.gridHeight, maxY);
 
-  const startCol = Math.max(0, Math.floor(minX / cellWidth));
-  const endCol = Math.min(dims.N - 1, Math.floor(Math.max(0, maxX - 0.01) / cellWidth));
-  const startRow = Math.max(0, Math.floor(minY / cellHeight));
-  const endRow = Math.min(dims.M - 1, Math.floor(Math.max(0, maxY - 0.01) / cellHeight));
+  if (selectionMaxX <= selectionMinX || selectionMaxY <= selectionMinY) return [];
+
+  const startCol = Math.max(0, Math.floor((selectionMinX - metrics.originX) / metrics.cellWidth));
+  const endCol = Math.min(dims.N - 1, Math.floor(Math.max(0, selectionMaxX - metrics.originX - 0.01) / metrics.cellWidth));
+  const startRow = Math.max(0, Math.floor((selectionMinY - metrics.originY) / metrics.cellHeight));
+  const endRow = Math.min(dims.M - 1, Math.floor(Math.max(0, selectionMaxY - metrics.originY - 0.01) / metrics.cellHeight));
   const cells: RegionSelectionCell[] = [];
 
   for (let row = startRow; row <= endRow; row++) {
@@ -113,23 +301,23 @@ const getCellsInLasso = (
     const point = points[0];
     if (!point) return [];
 
-    const cellWidth = canvas.width / dims.N;
-    const cellHeight = canvas.height / dims.M;
-    const col = Math.min(dims.N - 1, Math.max(0, Math.floor(point.x / cellWidth)));
-    const row = Math.min(dims.M - 1, Math.max(0, Math.floor(point.y / cellHeight)));
+    const cell = getCellFromPoint(point, canvas, dims);
+    if (!cell) return [];
+    const { row, col } = cell;
     return isSelectableCell(data[row]?.[col]) ? [{ row, col }] : [];
   }
 
-  const cellWidth = canvas.width / dims.N;
-  const cellHeight = canvas.height / dims.M;
-  const minX = Math.max(0, Math.min(...points.map(point => point.x)));
-  const maxX = Math.min(canvas.width, Math.max(...points.map(point => point.x)));
-  const minY = Math.max(0, Math.min(...points.map(point => point.y)));
-  const maxY = Math.min(canvas.height, Math.max(...points.map(point => point.y)));
-  const startCol = Math.max(0, Math.floor(minX / cellWidth));
-  const endCol = Math.min(dims.N - 1, Math.floor(Math.max(0, maxX - 0.01) / cellWidth));
-  const startRow = Math.max(0, Math.floor(minY / cellHeight));
-  const endRow = Math.min(dims.M - 1, Math.floor(Math.max(0, maxY - 0.01) / cellHeight));
+  const metrics = getGridMetrics(canvas, dims);
+  const minX = Math.max(metrics.originX, Math.min(...points.map(point => point.x)));
+  const maxX = Math.min(metrics.originX + metrics.gridWidth, Math.max(...points.map(point => point.x)));
+  const minY = Math.max(metrics.originY, Math.min(...points.map(point => point.y)));
+  const maxY = Math.min(metrics.originY + metrics.gridHeight, Math.max(...points.map(point => point.y)));
+  if (maxX <= minX || maxY <= minY) return [];
+
+  const startCol = Math.max(0, Math.floor((minX - metrics.originX) / metrics.cellWidth));
+  const endCol = Math.min(dims.N - 1, Math.floor(Math.max(0, maxX - metrics.originX - 0.01) / metrics.cellWidth));
+  const startRow = Math.max(0, Math.floor((minY - metrics.originY) / metrics.cellHeight));
+  const endRow = Math.min(dims.M - 1, Math.floor(Math.max(0, maxY - metrics.originY - 0.01) / metrics.cellHeight));
   const cells: RegionSelectionCell[] = [];
 
   for (let row = startRow; row <= endRow; row++) {
@@ -137,8 +325,8 @@ const getCellsInLasso = (
       if (!isSelectableCell(data[row]?.[col])) continue;
 
       const center = {
-        x: col * cellWidth + cellWidth / 2,
-        y: row * cellHeight + cellHeight / 2,
+        x: metrics.originX + col * metrics.cellWidth + metrics.cellWidth / 2,
+        y: metrics.originY + row * metrics.cellHeight + metrics.cellHeight / 2,
       };
 
       if (isPointInPolygon(center, points)) {
@@ -280,6 +468,255 @@ const drawPixelatedCanvas = (
   }
 };
 
+const drawPatternCanvas = (
+  dataToDraw: MappedPixel[][],
+  canvas: HTMLCanvasElement,
+  dims: { N: number; M: number },
+  layout: PatternCanvasLayout,
+  options: GridDownloadOptions | undefined,
+  colorCounts: { [key: string]: { count: number; color: string } } | null | undefined,
+  totalBeadCount: number | undefined,
+  selectedColorSystem: ColorSystem,
+  selectedCells: RegionSelectionCell[] = [],
+  previewCells: RegionSelectionCell[] = [],
+  selectionPath: CanvasPoint[] = [],
+  rectangleBounds?: { start: CanvasPoint; current: CanvasPoint } | null
+) => {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const { N, M } = dims;
+  const showGrid = options?.showGrid ?? true;
+  const gridInterval = Math.max(1, options?.gridInterval ?? 10);
+  const showCoordinates = options?.showCoordinates ?? true;
+  const showCellNumbers = options?.showCellNumbers ?? true;
+  const includeStats = options?.includeStats ?? true;
+  const majorGridLineColor = options?.gridLineColor === '#555555'
+    ? '#111111'
+    : options?.gridLineColor ?? '#111111';
+  const cellSize = layout.cellWidth;
+  const axisFillColor = '#A9473F';
+  const axisGridLineColor = '#6F2A26';
+  const axisTextColor = '#F8FAFC';
+  const baseGridLineColor = '#8A8A8A';
+  const backgroundCellColor = '#FAFAFA';
+  const baseGridLineWidth = cellSize <= 10 ? 0.9 : 1;
+  const majorGridLineWidth = cellSize <= 10 ? 2 : 2.4;
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (showCoordinates) {
+    const axisFontSize = Math.max(4, Math.min(10, Math.floor(cellSize * 0.52)));
+    ctx.font = `bold ${axisFontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.fillStyle = axisFillColor;
+    ctx.fillRect(layout.leftAxisX, layout.topAxisY, layout.axisLabelSize, layout.axisLabelSize);
+    ctx.fillRect(layout.rightAxisX, layout.topAxisY, layout.axisLabelSize, layout.axisLabelSize);
+    ctx.fillRect(layout.leftAxisX, layout.bottomAxisY, layout.axisLabelSize, layout.axisLabelSize);
+    ctx.fillRect(layout.rightAxisX, layout.bottomAxisY, layout.axisLabelSize, layout.axisLabelSize);
+
+    ctx.strokeStyle = axisGridLineColor;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(layout.leftAxisX + 0.5, layout.topAxisY + 0.5, layout.axisLabelSize, layout.axisLabelSize);
+    ctx.strokeRect(layout.rightAxisX + 0.5, layout.topAxisY + 0.5, layout.axisLabelSize, layout.axisLabelSize);
+    ctx.strokeRect(layout.leftAxisX + 0.5, layout.bottomAxisY + 0.5, layout.axisLabelSize, layout.axisLabelSize);
+    ctx.strokeRect(layout.rightAxisX + 0.5, layout.bottomAxisY + 0.5, layout.axisLabelSize, layout.axisLabelSize);
+
+    for (let col = 0; col < N; col++) {
+      const axisX = layout.originX + col * cellSize;
+      const label = String(col + 1);
+
+      ctx.fillStyle = axisFillColor;
+      ctx.fillRect(axisX, layout.topAxisY, cellSize, layout.axisLabelSize);
+      ctx.fillRect(axisX, layout.bottomAxisY, cellSize, layout.axisLabelSize);
+      ctx.strokeStyle = axisGridLineColor;
+      ctx.strokeRect(axisX + 0.5, layout.topAxisY + 0.5, cellSize, layout.axisLabelSize);
+      ctx.strokeRect(axisX + 0.5, layout.bottomAxisY + 0.5, cellSize, layout.axisLabelSize);
+      ctx.fillStyle = axisTextColor;
+      ctx.fillText(label, axisX + cellSize / 2, layout.topAxisY + layout.axisLabelSize / 2);
+      ctx.fillText(label, axisX + cellSize / 2, layout.bottomAxisY + layout.axisLabelSize / 2);
+    }
+
+    for (let row = 0; row < M; row++) {
+      const axisY = layout.originY + row * cellSize;
+      const label = String(row + 1);
+
+      ctx.fillStyle = axisFillColor;
+      ctx.fillRect(layout.leftAxisX, axisY, layout.axisLabelSize, cellSize);
+      ctx.fillRect(layout.rightAxisX, axisY, layout.axisLabelSize, cellSize);
+      ctx.strokeStyle = axisGridLineColor;
+      ctx.strokeRect(layout.leftAxisX + 0.5, axisY + 0.5, layout.axisLabelSize, cellSize);
+      ctx.strokeRect(layout.rightAxisX + 0.5, axisY + 0.5, layout.axisLabelSize, cellSize);
+      ctx.fillStyle = axisTextColor;
+      ctx.fillText(label, layout.leftAxisX + layout.axisLabelSize / 2, axisY + cellSize / 2);
+      ctx.fillText(label, layout.rightAxisX + layout.axisLabelSize / 2, axisY + cellSize / 2);
+    }
+  }
+
+  const fontSize = Math.max(8, Math.floor(cellSize * 0.4));
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  for (let row = 0; row < M; row++) {
+    for (let col = 0; col < N; col++) {
+      const cellData = dataToDraw[row]?.[col];
+      const drawX = layout.originX + col * cellSize;
+      const drawY = layout.originY + row * cellSize;
+
+      if (cellData && !cellData.isExternal && cellData.key !== TRANSPARENT_KEY) {
+        const cellColor = cellData.color || '#FFFFFF';
+        ctx.fillStyle = cellColor;
+        ctx.fillRect(drawX, drawY, cellSize, cellSize);
+
+        if (showCellNumbers) {
+          ctx.fillStyle = getContrastColor(cellColor);
+          ctx.fillText(
+            getDisplayColorKey(cellColor, selectedColorSystem),
+            drawX + cellSize / 2,
+            drawY + cellSize / 2
+          );
+        }
+      } else {
+        ctx.fillStyle = backgroundCellColor;
+        ctx.fillRect(drawX, drawY, cellSize, cellSize);
+      }
+
+      ctx.strokeStyle = baseGridLineColor;
+      ctx.lineWidth = baseGridLineWidth;
+      ctx.strokeRect(drawX + 0.5, drawY + 0.5, cellSize, cellSize);
+    }
+  }
+
+  if (showGrid) {
+    ctx.strokeStyle = majorGridLineColor;
+    ctx.lineWidth = majorGridLineWidth;
+
+    for (let col = gridInterval; col < N; col += gridInterval) {
+      const lineX = layout.originX + col * cellSize;
+      ctx.beginPath();
+      ctx.moveTo(lineX, layout.topAxisY);
+      ctx.lineTo(lineX, layout.bottomAxisY + layout.axisLabelSize);
+      ctx.stroke();
+    }
+
+    for (let row = gridInterval; row < M; row += gridInterval) {
+      const lineY = layout.originY + row * cellSize;
+      ctx.beginPath();
+      ctx.moveTo(layout.leftAxisX, lineY);
+      ctx.lineTo(layout.rightAxisX + layout.axisLabelSize, lineY);
+      ctx.stroke();
+    }
+  }
+
+  ctx.strokeStyle = '#111111';
+  ctx.lineWidth = majorGridLineWidth;
+  ctx.strokeRect(
+    layout.originX + 0.5,
+    layout.originY + 0.5,
+    layout.gridWidth,
+    layout.gridHeight
+  );
+
+  const highlightedCellKeys = new Set([
+    ...selectedCells.map(cell => `${cell.row}:${cell.col}`),
+    ...previewCells.map(cell => `${cell.row}:${cell.col}`),
+  ]);
+
+  if (highlightedCellKeys.size > 0) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.34)';
+    ctx.strokeStyle = 'rgba(185, 28, 28, 0.95)';
+    ctx.lineWidth = Math.max(1, cellSize * 0.08);
+
+    highlightedCellKeys.forEach(key => {
+      const [rowText, colText] = key.split(':');
+      const row = Number(rowText);
+      const col = Number(colText);
+      ctx.fillRect(layout.originX + col * cellSize, layout.originY + row * cellSize, cellSize, cellSize);
+      ctx.strokeRect(layout.originX + col * cellSize + 0.5, layout.originY + row * cellSize + 0.5, cellSize - 1, cellSize - 1);
+    });
+
+    ctx.restore();
+  }
+
+  if (rectangleBounds) {
+    const minX = Math.min(rectangleBounds.start.x, rectangleBounds.current.x);
+    const minY = Math.min(rectangleBounds.start.y, rectangleBounds.current.y);
+    const width = Math.abs(rectangleBounds.current.x - rectangleBounds.start.x);
+    const height = Math.abs(rectangleBounds.current.y - rectangleBounds.start.y);
+
+    ctx.save();
+    ctx.setLineDash([8, 5]);
+    ctx.strokeStyle = 'rgba(37, 99, 235, 0.95)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(minX, minY, width, height);
+    ctx.restore();
+  }
+
+  if (selectionPath.length > 1) {
+    ctx.save();
+    ctx.setLineDash([8, 5]);
+    ctx.strokeStyle = 'rgba(37, 99, 235, 0.95)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(selectionPath[0].x, selectionPath[0].y);
+    selectionPath.slice(1).forEach(point => ctx.lineTo(point.x, point.y));
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (includeStats && colorCounts && Object.keys(colorCounts).length > 0) {
+    const colorKeys = Object.keys(colorCounts).sort(sortColorKeys);
+    const columns = Math.max(1, Math.min(8, Math.floor((layout.width - 40) / 120)));
+    const itemWidth = Math.floor((layout.width - 40) / columns);
+    const swatchSize = 28;
+    const labelFontSize = 16;
+    const countFontSize = 13;
+
+    colorKeys.forEach((key, index) => {
+      const row = Math.floor(index / columns);
+      const col = index % columns;
+      const x = 20 + col * itemWidth;
+      const y = layout.statsY + row * 44;
+      const item = colorCounts[key];
+      const color = item.color || key;
+      const label = getDisplayColorKey(color, selectedColorSystem);
+
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, swatchSize, swatchSize);
+      ctx.strokeStyle = '#CCCCCC';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, swatchSize, swatchSize);
+
+      ctx.fillStyle = getContrastColor(color);
+      ctx.font = `bold ${Math.max(8, Math.floor(labelFontSize * 0.58))}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x + swatchSize / 2, y + swatchSize / 2);
+
+      ctx.fillStyle = '#111111';
+      ctx.font = `bold ${labelFontSize}px sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.fillText(label, x + swatchSize + 8, y + swatchSize / 2);
+      ctx.font = `${countFontSize}px sans-serif`;
+      ctx.fillStyle = '#555555';
+      ctx.fillText(String(item.count), x + swatchSize + 8, y + swatchSize + 16);
+    });
+
+    ctx.fillStyle = '#111111';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`所需豆子数量：${totalBeadCount ?? 0}`, 20, layout.height - 28);
+  }
+};
+
 const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
   mappedPixelData,
   gridDimensions,
@@ -291,6 +728,12 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
   selectionMode = 'none',
   selectedRegionCells = [],
   onRegionSelectionComplete,
+  displayScale = 1,
+  renderMode = 'editor',
+  downloadOptions,
+  colorCounts,
+  totalBeadCount,
+  selectedColorSystem = 'MARD',
 }) => {
   const [darkModeState, setDarkModeState] = useState<boolean | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number; pageX: number; pageY: number } | null>(null);
@@ -358,24 +801,69 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
     // Ensure darkModeState is not null before drawing
     if (mappedPixelData && gridDimensions && canvasRef.current && darkModeState !== null) {
       console.log(`Redrawing canvas, dark mode: ${darkModeState}`); // Log redraw trigger
-      drawPixelatedCanvas(
-        mappedPixelData,
-        canvasRef.current,
-        gridDimensions,
-        highlightColorKey,
-        isHighlighting,
-        selectedRegionCells,
-        previewRegionCells,
-        selectionMode === 'lasso' && isSelectingRegion ? lassoPoints : [],
-        selectionMode === 'rectangle' && isSelectingRegion && selectionStart && selectionCurrent
-          ? { start: selectionStart, current: selectionCurrent }
-          : null
-      );
+      const patternLayout = renderMode === 'pattern'
+        ? getPatternCanvasLayout(gridDimensions, downloadOptions, colorCounts)
+        : null;
+      const canvasSize = patternLayout ?? getResponsiveCanvasSize(gridDimensions);
+      if (
+        canvasRef.current.width !== canvasSize.width ||
+        canvasRef.current.height !== canvasSize.height
+      ) {
+        canvasRef.current.width = canvasSize.width;
+        canvasRef.current.height = canvasSize.height;
+      }
+
+      if (patternLayout) {
+        setCanvasGridMetrics(canvasRef.current, patternLayout);
+        drawPatternCanvas(
+          mappedPixelData,
+          canvasRef.current,
+          gridDimensions,
+          patternLayout,
+          downloadOptions,
+          colorCounts,
+          totalBeadCount,
+          selectedColorSystem,
+          selectedRegionCells,
+          previewRegionCells,
+          selectionMode === 'lasso' && isSelectingRegion ? lassoPoints : [],
+          selectionMode === 'rectangle' && isSelectingRegion && selectionStart && selectionCurrent
+            ? { start: selectionStart, current: selectionCurrent }
+            : null
+        );
+      } else {
+        setCanvasGridMetrics(canvasRef.current, {
+          originX: 0,
+          originY: 0,
+          cellWidth: canvasSize.width / gridDimensions.N,
+          cellHeight: canvasSize.height / gridDimensions.M,
+          gridWidth: canvasSize.width,
+          gridHeight: canvasSize.height,
+        });
+        drawPixelatedCanvas(
+          mappedPixelData,
+          canvasRef.current,
+          gridDimensions,
+          highlightColorKey,
+          isHighlighting,
+          selectedRegionCells,
+          previewRegionCells,
+          selectionMode === 'lasso' && isSelectingRegion ? lassoPoints : [],
+          selectionMode === 'rectangle' && isSelectingRegion && selectionStart && selectionCurrent
+            ? { start: selectionStart, current: selectionCurrent }
+            : null
+        );
+      }
     }
   }, [
     mappedPixelData,
     gridDimensions,
     canvasRef,
+    renderMode,
+    downloadOptions,
+    colorCounts,
+    totalBeadCount,
+    selectedColorSystem,
     darkModeState,
     highlightColorKey,
     isHighlighting,
@@ -387,6 +875,14 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
     selectionStart,
     selectionCurrent,
   ]); // Add darkModeState dependency
+
+  const scaledCanvasWidth = useMemo(() => {
+    if (!gridDimensions || displayScale === 1) return undefined;
+    const layout = renderMode === 'pattern'
+      ? getPatternCanvasLayout(gridDimensions, downloadOptions, colorCounts)
+      : getResponsiveCanvasSize(gridDimensions);
+    return `${Math.round(layout.width * displayScale)}px`;
+  }, [colorCounts, displayScale, downloadOptions, gridDimensions, renderMode]);
 
   // 处理高亮效果
   useEffect(() => {
@@ -601,6 +1097,8 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
         userSelect: 'none',
         WebkitUserSelect: 'none',
         WebkitTouchCallout: 'none',
+        maxWidth: displayScale > 1 ? 'none' : '100%',
+        width: scaledCanvasWidth,
       }}
     />
   );

@@ -1,6 +1,6 @@
 interface Env {
-  VOLC_ACCESS_KEY_ID: string;
-  VOLC_SECRET_ACCESS_KEY: string;
+  VOLC_ACCESS_KEY_ID?: string;
+  VOLC_SECRET_ACCESS_KEY?: string;
 }
 
 // 火山引擎API配置
@@ -14,9 +14,20 @@ const encoder = new TextEncoder();
 const HEADER_KEYS_TO_IGNORE = new Set([
   'authorization',
   'content-length',
-  'content-type',
   'user-agent',
 ]);
+
+function requireVolcEngineEnv(env: Env): Required<Env> {
+  const missing = ['VOLC_ACCESS_KEY_ID', 'VOLC_SECRET_ACCESS_KEY'].filter(
+    (key) => !env[key as keyof Env]
+  );
+
+  if (missing.length > 0) {
+    throw new Error(`Missing Cloudflare Pages secrets: ${missing.join(', ')}`);
+  }
+
+  return env as Required<Env>;
+}
 
 // Uint8Array 转 hex 字符串
 function toHex(buf: Uint8Array): string {
@@ -147,7 +158,7 @@ function getDateTimeNow(): string {
 
 // 提交任务到即梦AI
 async function submitTask(imageBase64: string, prompt: string, env: Env) {
-  const { VOLC_ACCESS_KEY_ID: accessKeyId, VOLC_SECRET_ACCESS_KEY: secretAccessKey } = env;
+  const { VOLC_ACCESS_KEY_ID: accessKeyId, VOLC_SECRET_ACCESS_KEY: secretAccessKey } = requireVolcEngineEnv(env);
 
   const base64Data = imageBase64.includes(',')
     ? imageBase64.split(',')[1]
@@ -174,6 +185,7 @@ async function submitTask(imageBase64: string, prompt: string, env: Env) {
   const headers: Record<string, string> = {
     'host': VOLC_API_HOST,
     'X-Date': xDate,
+    'X-Content-Sha256': bodySha,
     'content-type': 'application/json'
   };
 
@@ -192,8 +204,7 @@ async function submitTask(imageBase64: string, prompt: string, env: Env) {
     method: 'POST',
     headers: {
       ...headers,
-      'Authorization': authorization,
-      'Content-Length': encoder.encode(body).length.toString()
+      'Authorization': authorization
     },
     body: body
   });
@@ -231,7 +242,7 @@ async function submitTask(imageBase64: string, prompt: string, env: Env) {
 
 // 查询任务结果
 async function queryTask(taskId: string, env: Env) {
-  const { VOLC_ACCESS_KEY_ID: accessKeyId, VOLC_SECRET_ACCESS_KEY: secretAccessKey } = env;
+  const { VOLC_ACCESS_KEY_ID: accessKeyId, VOLC_SECRET_ACCESS_KEY: secretAccessKey } = requireVolcEngineEnv(env);
 
   const requestBody = {
     req_key: 'jimeng_t2i_v40',
@@ -251,6 +262,7 @@ async function queryTask(taskId: string, env: Env) {
   const headers: Record<string, string> = {
     'host': VOLC_API_HOST,
     'X-Date': xDate,
+    'X-Content-Sha256': bodySha,
     'content-type': 'application/json'
   };
 
@@ -269,8 +281,7 @@ async function queryTask(taskId: string, env: Env) {
     method: 'POST',
     headers: {
       ...headers,
-      'Authorization': authorization,
-      'Content-Length': encoder.encode(body).length.toString()
+      'Authorization': authorization
     },
     body: body
   });

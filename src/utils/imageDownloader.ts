@@ -211,8 +211,82 @@ interface DownloadImageParams {
 }
 
 export interface DownloadImagePreviewResult {
-  dataURL: string;
+  imageUrl: string;
+  blob: Blob;
   filename: string;
+}
+
+function isIOSBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (
+    navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+  );
+}
+
+function getDownloadCellSize(N: number, M: number): number {
+  const maxGridSide = isIOSBrowser() ? 3600 : 7200;
+  const largestSide = Math.max(N, M);
+  if (largestSide <= 0) return 30;
+
+  return Math.max(8, Math.min(30, Math.floor(maxGridSide / largestSide)));
+}
+
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+      } else {
+        reject(new Error('Canvas 转换为图片失败'));
+      }
+    }, 'image/png');
+  });
+}
+
+function triggerBrowserDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = filename;
+  link.rel = 'noopener';
+  link.style.display = 'none';
+
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+export async function saveImageBlob(blob: Blob, filename: string): Promise<void> {
+  const file = new File([blob], filename, { type: blob.type || 'image/png' });
+  const navigatorWithShare = navigator as Navigator & {
+    canShare?: (data: ShareData) => boolean;
+    share?: (data: ShareData) => Promise<void>;
+  };
+
+  if (
+    isIOSBrowser() &&
+    navigatorWithShare.share &&
+    navigatorWithShare.canShare?.({ files: [file] })
+  ) {
+    try {
+      await navigatorWithShare.share({
+        files: [file],
+        title: '拼豆图纸',
+        text: '保存生成的拼豆图纸',
+      });
+      return;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return;
+      }
+      console.warn('系统分享保存失败，尝试普通下载:', error);
+    }
+  }
+
+  triggerBrowserDownload(blob, filename);
 }
 
 // 生成最终图纸图片，用于预览或下载
@@ -237,22 +311,22 @@ export async function generateDownloadImagePreview({
   }
   
   // 主要下载处理函数
-  const processDownload = (): DownloadImagePreviewResult | null => {
+  const processDownload = async (): Promise<DownloadImagePreviewResult | null> => {
     const { N, M } = gridDimensions; // 此时已确保gridDimensions不为null
-    const downloadCellSize = 30;
+    const downloadCellSize = getDownloadCellSize(N, M);
   
     // 从下载选项中获取设置
     const { showGrid, gridInterval, showCoordinates, gridLineColor, includeStats, showCellNumbers = true } = options;
   
-    // 设置边距空间用于坐标轴标注（如果需要）
-    const axisLabelSize = showCoordinates ? Math.max(30, Math.floor(downloadCellSize)) : 0;
+    // 设置坐标轴空间。坐标轴按格子逐格绘制，轴厚度略大于格子以容纳三位数。
+    const axisLabelSize = showCoordinates ? Math.max(downloadCellSize, Math.ceil(downloadCellSize * 1.35), 14) : 0;
     
     // 定义统计区域的基本参数
     const statsPadding = 20;
     let statsHeight = 0;
     
     // 预先计算用于字体大小的变量
-    const preCalcWidth = N * downloadCellSize + axisLabelSize;
+    const preCalcWidth = N * downloadCellSize + (axisLabelSize * 2);
     const preCalcAvailableWidth = preCalcWidth - (statsPadding * 2);
     
     // 计算字体大小 - 与颜色统计区域保持一致
@@ -261,10 +335,10 @@ export async function generateDownloadImagePreview({
     const statsFontSize = Math.floor(baseStatsFontSize + (widthFactor * 10));
     
     // 计算额外边距，确保坐标数字完全显示（四边都需要）
-    const extraLeftMargin = showCoordinates ? Math.max(20, statsFontSize * 2) : 0; // 左侧额外边距
-    const extraRightMargin = showCoordinates ? Math.max(20, statsFontSize * 2) : 0; // 右侧额外边距
-    const extraTopMargin = showCoordinates ? Math.max(15, statsFontSize) : 0; // 顶部额外边距
-    const extraBottomMargin = showCoordinates ? Math.max(15, statsFontSize) : 0; // 底部额外边距
+    const extraLeftMargin = showCoordinates ? Math.max(10, statsFontSize) : 0; // 左侧额外边距
+    const extraRightMargin = showCoordinates ? Math.max(10, statsFontSize) : 0; // 右侧额外边距
+    const extraTopMargin = showCoordinates ? Math.max(8, Math.floor(statsFontSize * 0.8)) : 0; // 顶部额外边距
+    const extraBottomMargin = showCoordinates ? Math.max(8, Math.floor(statsFontSize * 0.8)) : 0; // 底部额外边距
     
     // 计算网格尺寸
     const gridWidth = N * downloadCellSize;
@@ -329,99 +403,81 @@ export async function generateDownloadImagePreview({
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, downloadWidth, downloadHeight);
   
-    console.log(`Generating download grid image: ${downloadWidth}x${downloadHeight}`);
+    console.log(`Generating download grid image: ${downloadWidth}x${downloadHeight}, cell size: ${downloadCellSize}`);
     const fontSize = Math.max(8, Math.floor(downloadCellSize * 0.4));
     
+    const gridOriginX = extraLeftMargin + axisLabelSize;
+    const gridOriginY = titleBarHeight + extraTopMargin + axisLabelSize;
+    const topAxisY = titleBarHeight + extraTopMargin;
+    const bottomAxisY = gridOriginY + gridHeight;
+    const leftAxisX = extraLeftMargin;
+    const rightAxisX = gridOriginX + gridWidth;
+    const axisFillColor = '#A9473F';
+    const axisGridLineColor = '#6F2A26';
+    const axisTextColor = '#F8FAFC';
+    const baseGridLineColor = '#8A8A8A';
+    const majorGridLineColor = gridLineColor === '#555555' ? '#111111' : gridLineColor;
+    const backgroundCellColor = '#FAFAFA';
+    const baseGridLineWidth = downloadCellSize <= 10 ? 0.9 : 1;
+    const majorGridLineWidth = downloadCellSize <= 10 ? 2 : 2.4;
+
     // 如果需要，先绘制坐标轴和网格背景
     if (showCoordinates) {
-      // 绘制坐标轴背景
-      ctx.fillStyle = '#F5F5F5'; // 浅灰色背景
-      // 横轴背景 (顶部)
-      ctx.fillRect(extraLeftMargin + axisLabelSize, titleBarHeight + extraTopMargin, gridWidth, axisLabelSize);
-      // 横轴背景 (底部)
-      ctx.fillRect(extraLeftMargin + axisLabelSize, titleBarHeight + extraTopMargin + axisLabelSize + gridHeight, gridWidth, axisLabelSize);
-      // 纵轴背景 (左侧)
-      ctx.fillRect(extraLeftMargin, titleBarHeight + extraTopMargin + axisLabelSize, axisLabelSize, gridHeight);
-      // 纵轴背景 (右侧)
-      ctx.fillRect(extraLeftMargin + axisLabelSize + gridWidth, titleBarHeight + extraTopMargin + axisLabelSize, axisLabelSize, gridHeight);
-      
-      // 绘制坐标轴数字
-      ctx.fillStyle = '#333333'; // 坐标数字颜色
-      // 使用固定的字体大小，不进行缩放
-      const axisFontSize = 14;
-      ctx.font = `${axisFontSize}px sans-serif`;
+      const axisFontSize = Math.max(4, Math.min(10, Math.floor(downloadCellSize * 0.52)));
+      ctx.font = `bold ${axisFontSize}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
 
-      // X轴（顶部）数字
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      for (let i = 0; i < N; i++) {
-        if ((i + 1) % gridInterval === 0 || i === 0 || i === N - 1) { // 在间隔处、起始处和结束处标注
-          // 将数字放在轴线之上，考虑额外边距
-          const numX = extraLeftMargin + axisLabelSize + (i * downloadCellSize) + (downloadCellSize / 2);
-          const numY = titleBarHeight + extraTopMargin + (axisLabelSize / 2);
-          ctx.fillText((i + 1).toString(), numX, numY);
-        }
-      }
-      
-      // X轴（底部）数字
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      for (let i = 0; i < N; i++) {
-        if ((i + 1) % gridInterval === 0 || i === 0 || i === N - 1) { // 在间隔处、起始处和结束处标注
-          // 将数字放在底部轴线上
-          const numX = extraLeftMargin + axisLabelSize + (i * downloadCellSize) + (downloadCellSize / 2);
-          const numY = titleBarHeight + extraTopMargin + axisLabelSize + gridHeight + (axisLabelSize / 2);
-          ctx.fillText((i + 1).toString(), numX, numY);
-        }
-      }
-      
-      // Y轴（左侧）数字
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      for (let j = 0; j < M; j++) {
-        if ((j + 1) % gridInterval === 0 || j === 0 || j === M - 1) { // 在间隔处、起始处和结束处标注
-          // 将数字放在轴线之左
-          const numX = extraLeftMargin + (axisLabelSize / 2);
-          const numY = titleBarHeight + extraTopMargin + axisLabelSize + (j * downloadCellSize) + (downloadCellSize / 2);
-          ctx.fillText((j + 1).toString(), numX, numY);
-        }
-      }
-      
-      // Y轴（右侧）数字
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      for (let j = 0; j < M; j++) {
-        if ((j + 1) % gridInterval === 0 || j === 0 || j === M - 1) { // 在间隔处、起始处和结束处标注
-          // 将数字放在右侧轴线上
-          const numX = extraLeftMargin + axisLabelSize + gridWidth + (axisLabelSize / 2);
-          const numY = titleBarHeight + extraTopMargin + axisLabelSize + (j * downloadCellSize) + (downloadCellSize / 2);
-          ctx.fillText((j + 1).toString(), numX, numY);
-        }
-      }
-      
-      // 绘制坐标轴边框
-      ctx.strokeStyle = '#AAAAAA';
+      // 四角空白轴格
+      ctx.fillStyle = axisFillColor;
+      ctx.fillRect(leftAxisX, topAxisY, axisLabelSize, axisLabelSize);
+      ctx.fillRect(rightAxisX, topAxisY, axisLabelSize, axisLabelSize);
+      ctx.fillRect(leftAxisX, bottomAxisY, axisLabelSize, axisLabelSize);
+      ctx.fillRect(rightAxisX, bottomAxisY, axisLabelSize, axisLabelSize);
+      ctx.strokeStyle = axisGridLineColor;
       ctx.lineWidth = 1;
-      // 顶部横轴底边
-      ctx.beginPath();
-      ctx.moveTo(extraLeftMargin + axisLabelSize, titleBarHeight + extraTopMargin + axisLabelSize);
-      ctx.lineTo(extraLeftMargin + axisLabelSize + gridWidth, titleBarHeight + extraTopMargin + axisLabelSize);
-      ctx.stroke();
-      // 底部横轴顶边
-      ctx.beginPath();
-      ctx.moveTo(extraLeftMargin + axisLabelSize, titleBarHeight + extraTopMargin + axisLabelSize + gridHeight);
-      ctx.lineTo(extraLeftMargin + axisLabelSize + gridWidth, titleBarHeight + extraTopMargin + axisLabelSize + gridHeight);
-      ctx.stroke();
-      // 左侧纵轴右边
-      ctx.beginPath();
-      ctx.moveTo(extraLeftMargin + axisLabelSize, titleBarHeight + extraTopMargin + axisLabelSize);
-      ctx.lineTo(extraLeftMargin + axisLabelSize, titleBarHeight + extraTopMargin + axisLabelSize + gridHeight);
-      ctx.stroke();
-      // 右侧纵轴左边
-      ctx.beginPath();
-      ctx.moveTo(extraLeftMargin + axisLabelSize + gridWidth, titleBarHeight + extraTopMargin + axisLabelSize);
-      ctx.lineTo(extraLeftMargin + axisLabelSize + gridWidth, titleBarHeight + extraTopMargin + axisLabelSize + gridHeight);
-      ctx.stroke();
+      ctx.strokeRect(leftAxisX + 0.5, topAxisY + 0.5, axisLabelSize, axisLabelSize);
+      ctx.strokeRect(rightAxisX + 0.5, topAxisY + 0.5, axisLabelSize, axisLabelSize);
+      ctx.strokeRect(leftAxisX + 0.5, bottomAxisY + 0.5, axisLabelSize, axisLabelSize);
+      ctx.strokeRect(rightAxisX + 0.5, bottomAxisY + 0.5, axisLabelSize, axisLabelSize);
+
+      // X轴（顶部/底部）逐格数字
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (let i = 0; i < N; i++) {
+        const axisX = gridOriginX + (i * downloadCellSize);
+        const label = (i + 1).toString();
+
+        ctx.fillStyle = axisFillColor;
+        ctx.fillRect(axisX, topAxisY, downloadCellSize, axisLabelSize);
+        ctx.fillRect(axisX, bottomAxisY, downloadCellSize, axisLabelSize);
+        ctx.strokeStyle = axisGridLineColor;
+        ctx.strokeRect(axisX + 0.5, topAxisY + 0.5, downloadCellSize, axisLabelSize);
+        ctx.strokeRect(axisX + 0.5, bottomAxisY + 0.5, downloadCellSize, axisLabelSize);
+
+        ctx.fillStyle = axisTextColor;
+        ctx.fillText(label, axisX + (downloadCellSize / 2), topAxisY + (axisLabelSize / 2));
+        ctx.fillText(label, axisX + (downloadCellSize / 2), bottomAxisY + (axisLabelSize / 2));
+      }
+
+      // Y轴（左侧/右侧）逐格数字
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (let j = 0; j < M; j++) {
+        const axisY = gridOriginY + (j * downloadCellSize);
+        const label = (j + 1).toString();
+
+        ctx.fillStyle = axisFillColor;
+        ctx.fillRect(leftAxisX, axisY, axisLabelSize, downloadCellSize);
+        ctx.fillRect(rightAxisX, axisY, axisLabelSize, downloadCellSize);
+        ctx.strokeStyle = axisGridLineColor;
+        ctx.strokeRect(leftAxisX + 0.5, axisY + 0.5, axisLabelSize, downloadCellSize);
+        ctx.strokeRect(rightAxisX + 0.5, axisY + 0.5, axisLabelSize, downloadCellSize);
+
+        ctx.fillStyle = axisTextColor;
+        ctx.fillText(label, leftAxisX + (axisLabelSize / 2), axisY + (downloadCellSize / 2));
+        ctx.fillText(label, rightAxisX + (axisLabelSize / 2), axisY + (downloadCellSize / 2));
+      }
     }
     
     // 恢复默认文本对齐和基线，为后续绘制做准备
@@ -438,8 +494,8 @@ export async function generateDownloadImagePreview({
       for (let i = 0; i < N; i++) {
         const cellData = mappedPixelData[j][i];
         // 计算绘制位置，考虑额外边距和标题栏高度
-        const drawX = extraLeftMargin + i * downloadCellSize + axisLabelSize;
-        const drawY = titleBarHeight + extraTopMargin + j * downloadCellSize + axisLabelSize;
+        const drawX = gridOriginX + i * downloadCellSize;
+        const drawY = gridOriginY + j * downloadCellSize;
 
         // 根据是否是外部背景确定填充颜色
         if (cellData && !cellData.isExternal) {
@@ -455,48 +511,48 @@ export async function generateDownloadImagePreview({
             ctx.fillText(cellKey, drawX + downloadCellSize / 2, drawY + downloadCellSize / 2);
           }
         } else {
-          // 外部背景：填充白色
-          ctx.fillStyle = '#FFFFFF';
+          // 外部背景：同样绘制清晰格子，便于按坐标定位，但不显示色号。
+          ctx.fillStyle = backgroundCellColor;
           ctx.fillRect(drawX, drawY, downloadCellSize, downloadCellSize);
         }
 
         // 绘制所有单元格的边框
-        ctx.strokeStyle = '#DDDDDD'; // 浅色线条作为基础网格
-        ctx.lineWidth = 0.5;
+        ctx.strokeStyle = baseGridLineColor; // 背景格也保持清晰可见
+        ctx.lineWidth = baseGridLineWidth;
         ctx.strokeRect(drawX + 0.5, drawY + 0.5, downloadCellSize, downloadCellSize);
       }
     }
 
     // 如果需要，绘制分隔网格线
     if (showGrid) {
-      ctx.strokeStyle = gridLineColor; // 使用用户选择的颜色
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = majorGridLineColor; // 默认参考图纸使用黑色粗分隔线
+      ctx.lineWidth = majorGridLineWidth;
       
       // 绘制垂直分隔线 - 在单元格之间而不是边框上
       for (let i = gridInterval; i < N; i += gridInterval) {
-        const lineX = extraLeftMargin + i * downloadCellSize + axisLabelSize;
+        const lineX = gridOriginX + i * downloadCellSize;
         ctx.beginPath();
-        ctx.moveTo(lineX, titleBarHeight + extraTopMargin + axisLabelSize);
-        ctx.lineTo(lineX, titleBarHeight + extraTopMargin + axisLabelSize + M * downloadCellSize);
+        ctx.moveTo(lineX, topAxisY);
+        ctx.lineTo(lineX, bottomAxisY + axisLabelSize);
         ctx.stroke();
       }
       
       // 绘制水平分隔线 - 在单元格之间而不是边框上
       for (let j = gridInterval; j < M; j += gridInterval) {
-        const lineY = titleBarHeight + extraTopMargin + j * downloadCellSize + axisLabelSize;
+        const lineY = gridOriginY + j * downloadCellSize;
         ctx.beginPath();
-        ctx.moveTo(extraLeftMargin + axisLabelSize, lineY);
-        ctx.lineTo(extraLeftMargin + axisLabelSize + N * downloadCellSize, lineY);
+        ctx.moveTo(leftAxisX, lineY);
+        ctx.lineTo(rightAxisX + axisLabelSize, lineY);
         ctx.stroke();
       }
     }
 
     // 绘制整个网格区域的主边框
-    ctx.strokeStyle = '#000000'; // 黑色边框
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#111111'; // 黑色边框
+    ctx.lineWidth = majorGridLineWidth;
     ctx.strokeRect(
-      extraLeftMargin + axisLabelSize + 0.5, 
-      titleBarHeight + extraTopMargin + axisLabelSize + 0.5, 
+      gridOriginX + 0.5,
+      gridOriginY + 0.5,
       N * downloadCellSize, 
       M * downloadCellSize
     );
@@ -507,7 +563,7 @@ export async function generateDownloadImagePreview({
       
       // 增加额外的间距，防止标题文字侵入画布
       const statsTopMargin = 24; // 增加间距，防止文字侵入画布
-      const statsY = titleBarHeight + extraTopMargin + M * downloadCellSize + (axisLabelSize * 2) + statsPadding + statsTopMargin;
+      const statsY = bottomAxisY + axisLabelSize + statsPadding + statsTopMargin;
       
       // 计算统计区域的可用宽度
       const availableStatsWidth = downloadWidth - (statsPadding * 2);
@@ -614,6 +670,9 @@ export async function generateDownloadImagePreview({
         const newContext = newCanvas.getContext('2d');
         
         if (newContext) {
+          // 先填充背景，避免扩展出的画布区域在部分查看器中显示为透明。
+          newContext.fillStyle = '#FFFFFF';
+          newContext.fillRect(0, 0, newCanvas.width, newCanvas.height);
           // 复制原画布内容
           newContext.drawImage(downloadCanvas, 0, 0);
           
@@ -629,11 +688,12 @@ export async function generateDownloadImagePreview({
     }
 
     try {
-      const dataURL = downloadCanvas.toDataURL('image/png');
+      const blob = await canvasToPngBlob(downloadCanvas);
+      const imageUrl = URL.createObjectURL(blob);
       const filename = showCellNumbers
         ? `bead-grid-${N}x${M}-keys-palette_${selectedColorSystem}.png`
         : `bead-grid-${N}x${M}-pixel-palette_${selectedColorSystem}.png`;
-      return { dataURL, filename };
+      return { imageUrl, blob, filename };
     } catch (e) {
       console.error("生成图纸失败:", e);
       alert("无法生成图纸。");
@@ -649,12 +709,8 @@ export async function downloadImage(params: DownloadImageParams): Promise<void> 
   if (!result) return;
 
   try {
-    const link = document.createElement('a');
-    link.download = result.filename;
-    link.href = result.dataURL;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    await saveImageBlob(result.blob, result.filename);
+    URL.revokeObjectURL(result.imageUrl);
     console.log("Grid image download initiated.");
 
     // 如果启用了CSV导出，同时导出CSV文件

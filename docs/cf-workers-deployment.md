@@ -534,7 +534,7 @@ CF部署：
   ● 已修复。现在改为读取 NEXT_PUBLIC_OFFICIAL_DOMAIN 环境变量，未设置则完全跳过重定向。
 
   使用方式：在 .env.local 或构建环境中设置：
-  NEXT_PUBLIC_OFFICIAL_DOMAIN=https://liang.348349.xyz/
+  NEXT_PUBLIC_OFFICIAL_DOMAIN=https://example.com/
 
   不设置则不会重定向，CF Pages 临时域名可以正常访问。
   

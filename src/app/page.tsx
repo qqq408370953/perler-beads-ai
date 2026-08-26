@@ -1,7 +1,5 @@
 'use client';
 
-/* eslint-disable @next/next/no-img-element */
-
 import React, { useState, useRef, ChangeEvent, DragEvent, useEffect, useMemo, useCallback } from 'react';
 import Script from 'next/script';
 import InstallPWA from '../components/InstallPWA';
@@ -21,7 +19,7 @@ import {
 // 导入新的类型和组件
 import { GridDownloadOptions } from '../types/downloadTypes';
 import DownloadSettingsModal, { gridLineColorOptions } from '../components/DownloadSettingsModal';
-import { downloadImage, generateDownloadImagePreview, importCsvData } from '../utils/imageDownloader';
+import { downloadImage, generateDownloadImagePreview, importCsvData, saveImageBlob } from '../utils/imageDownloader';
 
 import { 
   colorSystemOptions, 
@@ -83,6 +81,7 @@ const fullBeadPalette: PaletteColor[] = Object.entries(mardToHexMapping)
   .filter((color): color is PaletteColor => color !== null);
 
 // ++ Add definition for background color keys ++
+const DEFAULT_GRANULARITY = 85;
 
 // 1. 导入新组件
 import PixelatedPreviewCanvas, { RegionSelectionCell, RegionSelectionMode } from '../components/PixelatedPreviewCanvas';
@@ -100,11 +99,13 @@ import DonationModal from '../components/DonationModal';
 import FocusModePreDownloadModal from '../components/FocusModePreDownloadModal';
 import ImageCropperModal from '../components/ImageCropperModal';
 import AIOptimizeModal from '../components/AIOptimizeModal';
+import { consumeSingleToolHandoff } from '../utils/singleToolHandoff';
+import { updateBatchSessionItem } from '../utils/batchSessionStore';
 
 export default function Home() {
   const [originalImageSrc, setOriginalImageSrc] = useState<string | null>(null);
-  const [granularity, setGranularity] = useState<number>(50);
-  const [granularityInput, setGranularityInput] = useState<string>("50");
+  const [granularity, setGranularity] = useState<number>(DEFAULT_GRANULARITY);
+  const [granularityInput, setGranularityInput] = useState<string>(DEFAULT_GRANULARITY.toString());
   const [similarityThreshold, setSimilarityThreshold] = useState<number>(12);
   const [similarityThresholdInput, setSimilarityThresholdInput] = useState<string>("12");
   const [maxColorCount, setMaxColorCount] = useState<number>(8);
@@ -129,6 +130,15 @@ export default function Home() {
   const [gridDimensions, setGridDimensions] = useState<{ N: number; M: number } | null>(null);
   const [colorCounts, setColorCounts] = useState<{ [key: string]: { count: number; color: string } } | null>(null);
   const [totalBeadCount, setTotalBeadCount] = useState<number>(0);
+  const [editHistory, setEditHistory] = useState<Array<{
+    mappedPixelData: MappedPixel[][];
+    colorCounts: { [key: string]: { count: number; color: string } } | null;
+    totalBeadCount: number;
+    initialGridColorKeys: string[];
+  }>>([]);
+  const [previewZoom, setPreviewZoom] = useState<number>(1);
+  const [cellReplaceTargetHex, setCellReplaceTargetHex] = useState<string>('');
+  const [batchReturnInfo, setBatchReturnInfo] = useState<{ itemId: string; fileName: string } | null>(null);
   const [tooltipData, setTooltipData] = useState<{ x: number, y: number, key: string, color: string } | null>(null);
   const [selectedCellAction, setSelectedCellAction] = useState<{
     row: number;
@@ -165,8 +175,7 @@ export default function Home() {
     exportCsv: false // 默认不导出CSV
   });
   const [isPatternPreviewOpen, setIsPatternPreviewOpen] = useState<boolean>(false);
-  const [patternPreviewSrc, setPatternPreviewSrc] = useState<string | null>(null);
-  const [patternPreviewFilename, setPatternPreviewFilename] = useState<string>('bead-pattern-preview.png');
+  const [isFullscreenEditorOpen, setIsFullscreenEditorOpen] = useState<boolean>(false);
   const [isGeneratingPatternPreview, setIsGeneratingPatternPreview] = useState<boolean>(false);
 
   // 新增：高亮相关状态
@@ -252,37 +261,7 @@ export default function Home() {
       })
     );
     
-    setMappedPixelData(newMappedPixelData);
-    
-    // 更新颜色统计
-    if (colorCounts) {
-      const newColorCounts = { ...colorCounts };
-      
-      // 减少原颜色的计数
-      const oldPixel = mappedPixelData[row][col];
-      if (newColorCounts[oldPixel.key]) {
-        newColorCounts[oldPixel.key].count--;
-        if (newColorCounts[oldPixel.key].count === 0) {
-          delete newColorCounts[oldPixel.key];
-        }
-      }
-      
-      // 增加新颜色的计数
-      if (newColorCounts[colorData.key]) {
-        newColorCounts[colorData.key].count++;
-      } else {
-        newColorCounts[colorData.key] = {
-          count: 1,
-          color: colorData.color
-        };
-      }
-      
-      setColorCounts(newColorCounts);
-      
-      // 更新总计数
-      const newTotal = Object.values(newColorCounts).reduce((sum, item) => sum + item.count, 0);
-      setTotalBeadCount(newTotal);
-    }
+    updatePixelDataAndCounts(newMappedPixelData);
   };
 
   const originalCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -297,6 +276,33 @@ export default function Home() {
 
   // ++ Add a ref for the main element ++
   const mainRef = useRef<HTMLElement>(null);
+  const skipAutoPixelateRef = useRef<boolean>(false);
+
+  const resizePixelatedCanvasForGrid = useCallback((dimensions: { N: number; M: number }): boolean => {
+    const pixelatedCanvas = pixelatedCanvasRef.current;
+    if (!pixelatedCanvas || dimensions.N <= 0 || dimensions.M <= 0) return false;
+
+    const baseWidth = 500;
+    const minCellSize = 4;
+    const recommendedCellSize = 6;
+    let outputWidth = baseWidth;
+
+    if (dimensions.N > 100) {
+      const requiredWidthForMinSize = dimensions.N * minCellSize;
+      const requiredWidthForRecommendedSize = dimensions.N * recommendedCellSize;
+      const maxWidth = typeof window !== 'undefined'
+        ? Math.min(1200, window.innerWidth * 0.9)
+        : 1200;
+
+      outputWidth = Math.min(maxWidth, Math.max(baseWidth, requiredWidthForRecommendedSize));
+      outputWidth = Math.max(outputWidth, requiredWidthForMinSize);
+    }
+
+    const outputHeight = Math.max(1, Math.round(outputWidth * (dimensions.M / dimensions.N)));
+    pixelatedCanvas.width = Math.round(outputWidth);
+    pixelatedCanvas.height = outputHeight;
+    return true;
+  }, []);
 
   // --- Derived State ---
 
@@ -349,6 +355,27 @@ export default function Home() {
     return sortColorsByHue(colorData);
   }, [mappedPixelData, selectedColorSystem]);
 
+  useEffect(() => {
+    if (!selectedCellAction) {
+      setCellReplaceTargetHex('');
+      return;
+    }
+
+    const nextTarget = currentGridColors.find(color => (
+      color.color.toUpperCase() !== selectedCellAction.color.toUpperCase()
+    ));
+    setCellReplaceTargetHex(nextTarget?.color.toUpperCase() ?? '');
+  }, [currentGridColors, selectedCellAction]);
+
+  const hasUsablePattern = Boolean(
+    mappedPixelData &&
+    gridDimensions &&
+    gridDimensions.N > 0 &&
+    gridDimensions.M > 0 &&
+    activeBeadPalette.length > 0
+  );
+  const isEditorOverlayOpen = isPatternPreviewOpen || isFullscreenEditorOpen;
+
   // 初始化时从本地存储加载自定义色板选择
   useEffect(() => {
     // 尝试从localStorage加载
@@ -396,6 +423,49 @@ export default function Home() {
       setIsCustomPalette(false);
     }
   }, []); // 只在组件首次加载时执行
+
+  useEffect(() => {
+    const handoff = consumeSingleToolHandoff();
+    if (!handoff) return;
+
+    skipAutoPixelateRef.current = true;
+    const applyCanvasSize = () => resizePixelatedCanvasForGrid(handoff.result.gridDimensions);
+
+    if (!applyCanvasSize()) {
+      window.requestAnimationFrame(applyCanvasSize);
+    }
+
+    setOriginalImageSrc(handoff.sourceImageSrc);
+    setEditHistory([]);
+    setPreviewZoom(1);
+    setBatchReturnInfo(handoff.batchContext ? {
+      itemId: handoff.batchContext.itemId,
+      fileName: handoff.fileName,
+    } : null);
+    setGranularity(handoff.options.granularity);
+    setGranularityInput(handoff.options.granularity.toString());
+    setSimilarityThreshold(handoff.options.similarityThreshold);
+    setSimilarityThresholdInput(handoff.options.similarityThreshold.toString());
+    setMaxColorCount(handoff.options.maxColorCount);
+    setMaxColorCountInput(handoff.options.maxColorCount.toString());
+    setPixelationMode(handoff.options.pixelationMode);
+    setSelectedColorSystem(handoff.options.selectedColorSystem);
+    setMappedPixelData(handoff.result.mappedPixelData);
+    setGridDimensions(handoff.result.gridDimensions);
+    setColorCounts(handoff.result.colorCounts);
+    setTotalBeadCount(handoff.result.totalBeadCount);
+    setInitialGridColorKeys(new Set(Object.keys(handoff.result.colorCounts)));
+    setIsManualColoringMode(false);
+    setSelectedColor(null);
+    setIsEraseMode(false);
+    setSelectedCellAction(null);
+    setRegionSelectionMode('none');
+    setSelectedRegionCells([]);
+
+    window.setTimeout(() => {
+      skipAutoPixelateRef.current = false;
+    }, 250);
+  }, [resizePixelatedCanvasForGrid]);
 
   // 更新 activeBeadPalette 基于自定义选择和排除列表
   useEffect(() => {
@@ -572,6 +642,9 @@ export default function Home() {
   };
 
   const processFile = (file: File) => {
+    setBatchReturnInfo(null);
+    setEditHistory([]);
+    setPreviewZoom(1);
     // 检查文件类型
     const fileExtension = file.name.split('.').pop()?.toLowerCase();
     
@@ -654,15 +727,16 @@ export default function Home() {
   // 处理裁剪确认
   const handleCropConfirm = (croppedImageSrc: string) => {
     setOriginalImageSrc(croppedImageSrc);
+    setEditHistory([]);
+    setPreviewZoom(1);
     setMappedPixelData(null);
     setGridDimensions(null);
     setColorCounts(null);
     setTotalBeadCount(0);
     setInitialGridColorKeys(new Set()); // ++ 重置初始键 ++
     // ++ 重置横轴格子数量为默认值 ++
-    const defaultGranularity = 50;
-    setGranularity(defaultGranularity);
-    setGranularityInput(defaultGranularity.toString());
+    setGranularity(DEFAULT_GRANULARITY);
+    setGranularityInput(DEFAULT_GRANULARITY.toString());
     setRemapTrigger(prev => prev + 1); // Trigger full remap for new image
     
     // 关闭裁剪弹窗
@@ -701,6 +775,8 @@ export default function Home() {
   const handleAIOptimized = (optimizedImageSrc: string) => {
     // 使用优化后的图片替换原图，并重新处理
     setOriginalImageSrc(optimizedImageSrc);
+    setEditHistory([]);
+    setPreviewZoom(1);
     setMappedPixelData(null);
     setGridDimensions(null);
     setColorCounts(null);
@@ -874,7 +950,7 @@ export default function Home() {
       setInitialGridColorKeys(new Set());
     };
     
-    img.onload = () => {
+    img.onload = async () => {
       console.log("Image loaded successfully.");
       const aspectRatio = img.height / img.width;
       const N = detailLevel;
@@ -1092,14 +1168,21 @@ export default function Home() {
         }
       }
 
+      const finalPixelData = await removeBackgroundFromPixelData(
+        limitedData,
+        { N, M },
+        { silent: true }
+      ) ?? limitedData;
+
       // --- 绘制和状态更新 ---
       if (pixelatedCanvasRef.current) {
-        setMappedPixelData(limitedData);
+        setEditHistory([]);
+        setMappedPixelData(finalPixelData);
         setGridDimensions({ N, M });
 
         const counts: { [key: string]: { count: number; color: string } } = {};
         let totalCount = 0;
-        limitedData.flat().forEach(cell => {
+        finalPixelData.flat().forEach(cell => {
           if (cell && cell.key && !cell.isExternal) {
             // 使用hex值作为统计键值，而不是色号
             const hexKey = cell.color;
@@ -1129,6 +1212,10 @@ export default function Home() {
 
   // 修改useEffect中的pixelateImage调用，加入模式参数
   useEffect(() => {
+    if (skipAutoPixelateRef.current) {
+      return;
+    }
+
     if (originalImageSrc && activeBeadPalette.length > 0) {
        const timeoutId = setTimeout(() => {
          if (originalImageSrc && originalCanvasRef.current && pixelatedCanvasRef.current && activeBeadPalette.length > 0) {
@@ -1239,36 +1326,83 @@ export default function Home() {
     };
 
     const handlePatternPreviewRequest = async () => {
-        setIsGeneratingPatternPreview(true);
-        try {
-          const preview = await generateDownloadImagePreview({
+        if (!mappedPixelData || !gridDimensions) return;
+        setTooltipData(null);
+        setPreviewZoom(1);
+        setIsFullscreenEditorOpen(false);
+        setIsPatternPreviewOpen(true);
+    };
+
+    const handleDownloadPatternPreview = async () => {
+      if (!hasUsablePattern) return;
+      setIsGeneratingPatternPreview(true);
+      try {
+        const preview = await generateDownloadImagePreview({
+          mappedPixelData,
+          gridDimensions,
+          colorCounts,
+          totalBeadCount,
+          options: downloadOptions,
+          activeBeadPalette,
+          selectedColorSystem
+        });
+
+        if (preview) {
+          await saveImageBlob(preview.blob, preview.filename);
+          URL.revokeObjectURL(preview.imageUrl);
+        }
+      } catch (error) {
+        console.error('下载当前预览失败:', error);
+        alert('无法下载当前预览，请重新生成后再试。');
+      } finally {
+        setIsGeneratingPatternPreview(false);
+      }
+    };
+
+    const handleOpenFullscreenEditor = () => {
+      if (!mappedPixelData || !gridDimensions) return;
+      setTooltipData(null);
+      setPreviewZoom(1);
+      setIsPatternPreviewOpen(false);
+      setIsFullscreenEditorOpen(true);
+    };
+
+    const handleSaveAndReturnToBatch = async () => {
+      if (!batchReturnInfo) {
+        window.location.href = '/batch';
+        return;
+      }
+
+      if (!mappedPixelData || !gridDimensions || !colorCounts) {
+        window.location.href = '/batch';
+        return;
+      }
+
+      try {
+        await updateBatchSessionItem(batchReturnInfo.itemId, {
+          status: 'done',
+          error: undefined,
+          options: {
+            granularity,
+            similarityThreshold,
+            maxColorCount,
+            pixelationMode,
+            selectedColorSystem,
+            autoRemoveBackground: true,
+          },
+          result: {
             mappedPixelData,
             gridDimensions,
             colorCounts,
             totalBeadCount,
-            options: downloadOptions,
-            activeBeadPalette,
-            selectedColorSystem
-          });
-
-          if (preview) {
-            setPatternPreviewSrc(preview.dataURL);
-            setPatternPreviewFilename(preview.filename);
-            setIsPatternPreviewOpen(true);
-          }
-        } finally {
-          setIsGeneratingPatternPreview(false);
-        }
-    };
-
-    const handleDownloadPatternPreview = () => {
-      if (!patternPreviewSrc) return;
-      const link = document.createElement('a');
-      link.download = patternPreviewFilename;
-      link.href = patternPreviewSrc;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+            colorCount: Object.keys(colorCounts).length,
+          },
+        });
+        window.location.href = '/batch';
+      } catch (error) {
+        console.error('保存单图精修结果到批量会话失败:', error);
+        alert('保存当前精修结果失败，请稍后再试。');
+      }
     };
 
     // --- Handler to toggle color exclusion ---
@@ -1547,18 +1681,16 @@ export default function Home() {
     return subjectMaskGrid;
   };
 
-  // 一键去背景：识别边缘主色并洪水填充去除
-  const handleAutoRemoveBackground = async () => {
-    if (!mappedPixelData || !gridDimensions) {
-      alert('请先生成图纸后再使用一键去背景。');
-      return;
-    }
-
-    const { N, M } = gridDimensions;
+  const removeBackgroundFromPixelData = async (
+    sourcePixelData: MappedPixel[][],
+    dimensions: { N: number; M: number },
+    options: { silent?: boolean } = {}
+  ): Promise<MappedPixel[][] | null> => {
+    const { N, M } = dimensions;
     const borderCounts = new Map<string, number>();
 
     const countBorderCell = (row: number, col: number) => {
-      const cell = mappedPixelData[row]?.[col];
+      const cell = sourcePixelData[row]?.[col];
       if (!cell || cell.isExternal || cell.key === TRANSPARENT_KEY) return;
       borderCounts.set(cell.key, (borderCounts.get(cell.key) || 0) + 1);
     };
@@ -1573,8 +1705,10 @@ export default function Home() {
     }
 
     if (borderCounts.size === 0) {
-      alert('边缘没有可识别的背景颜色。');
-      return;
+      if (!options.silent) {
+        alert('边缘没有可识别的背景颜色。');
+      }
+      return null;
     }
 
     let targetKey = '';
@@ -1586,14 +1720,14 @@ export default function Home() {
       }
     });
 
-    const newPixelData = mappedPixelData.map(row => row.map(cell => ({ ...cell })));
+    const newPixelData = sourcePixelData.map(row => row.map(cell => ({ ...cell })));
     let removedBackgroundCount = 0;
     let preservedSubjectBackgroundCount = 0;
     let usedSubjectMask = false;
 
     if (originalImageSrc) {
       try {
-        const subjectMaskGrid = await calculateSubjectMaskGridFromImage(originalImageSrc, gridDimensions);
+        const subjectMaskGrid = await calculateSubjectMaskGridFromImage(originalImageSrc, dimensions);
 
         for (let row = 0; row < M; row++) {
           for (let col = 0; col < N; col++) {
@@ -1650,8 +1784,10 @@ export default function Home() {
       }
 
       if (stack.length === 0) {
-        alert('未找到可去除的背景区域。');
-        return;
+        if (!options.silent) {
+          alert('未找到可去除的背景区域。');
+        }
+        return null;
       }
 
       while (stack.length > 0) {
@@ -1664,34 +1800,67 @@ export default function Home() {
       }
     }
 
-    setMappedPixelData(newPixelData);
+    return newPixelData;
+  };
 
-    const newColorCounts: { [hexKey: string]: { count: number; color: string } } = {};
-    let newTotalCount = 0;
-    newPixelData.flat().forEach(cell => {
-      if (cell && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
-        const cellHex = cell.color.toUpperCase();
-        if (!newColorCounts[cellHex]) {
-          newColorCounts[cellHex] = {
-            count: 0,
-            color: cellHex
-          };
-        }
-        newColorCounts[cellHex].count++;
-        newTotalCount++;
-      }
-    });
+  // 一键去背景：识别边缘主色并洪水填充去除
+  const handleAutoRemoveBackground = async () => {
+    if (!mappedPixelData || !gridDimensions) {
+      alert('请先生成图纸后再使用一键去背景。');
+      return;
+    }
 
-    setColorCounts(newColorCounts);
-    setTotalBeadCount(newTotalCount);
-    setInitialGridColorKeys(new Set(Object.keys(newColorCounts)));
+    const newPixelData = await removeBackgroundFromPixelData(mappedPixelData, gridDimensions);
+    if (!newPixelData) return;
+
+    updatePixelDataAndCounts(newPixelData);
   };
 
   // --- Tooltip Logic ---
 
   // --- Canvas Interaction ---
 
-  const updatePixelDataAndCounts = (newPixelData: MappedPixel[][]) => {
+  const pushEditHistory = () => {
+    if (!mappedPixelData) return;
+
+    setEditHistory((currentHistory) => [
+      ...currentHistory.slice(-19),
+      {
+        mappedPixelData: mappedPixelData.map(row => row.map(cell => ({ ...cell }))),
+        colorCounts: colorCounts
+          ? Object.fromEntries(Object.entries(colorCounts).map(([key, value]) => [key, { ...value }]))
+          : null,
+        totalBeadCount,
+        initialGridColorKeys: Array.from(initialGridColorKeys),
+      },
+    ]);
+  };
+
+  const handleUndoEdit = () => {
+    setEditHistory((currentHistory) => {
+      const lastSnapshot = currentHistory[currentHistory.length - 1];
+      if (!lastSnapshot) return currentHistory;
+
+      setMappedPixelData(lastSnapshot.mappedPixelData.map(row => row.map(cell => ({ ...cell }))));
+      setColorCounts(lastSnapshot.colorCounts
+        ? Object.fromEntries(Object.entries(lastSnapshot.colorCounts).map(([key, value]) => [key, { ...value }]))
+        : null);
+      setTotalBeadCount(lastSnapshot.totalBeadCount);
+      setInitialGridColorKeys(new Set(lastSnapshot.initialGridColorKeys));
+      setSelectedCellAction(null);
+      setTooltipData(null);
+      setSelectedRegionCells([]);
+
+      return currentHistory.slice(0, -1);
+    });
+  };
+
+  const updatePixelDataAndCounts = (newPixelData: MappedPixel[][], options: { recordHistory?: boolean } = {}) => {
+    const { recordHistory = true } = options;
+    if (recordHistory) {
+      pushEditHistory();
+    }
+
     setMappedPixelData(newPixelData);
 
     const newColorCounts: { [hexKey: string]: { count: number; color: string } } = {};
@@ -1836,31 +2005,7 @@ export default function Home() {
       );
     }
     
-    // 更新状态
-    setMappedPixelData(newPixelData);
-    
-    // 重新计算颜色统计
-    if (colorCounts) {
-      const newColorCounts: { [hexKey: string]: { count: number; color: string } } = {};
-      let newTotalCount = 0;
-      
-      newPixelData.flat().forEach(cell => {
-        if (cell && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
-          const cellHex = cell.color.toUpperCase();
-          if (!newColorCounts[cellHex]) {
-            newColorCounts[cellHex] = {
-              count: 0,
-              color: cellHex
-            };
-          }
-          newColorCounts[cellHex].count++;
-          newTotalCount++;
-        }
-      });
-      
-      setColorCounts(newColorCounts);
-      setTotalBeadCount(newTotalCount);
-    }
+    updatePixelDataAndCounts(newPixelData);
   };
 
   // ++ Re-introduce the combined interaction handler ++
@@ -1892,12 +2037,24 @@ export default function Home() {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    const canvasX = (clientX - rect.left) * scaleX;
-    const canvasY = (clientY - rect.top) * scaleY;
 
     const { N, M } = gridDimensions;
-    const cellWidthOutput = canvas.width / N;
-    const cellHeightOutput = canvas.height / M;
+    const gridOriginX = Number(canvas.dataset.gridOriginX ?? 0);
+    const gridOriginY = Number(canvas.dataset.gridOriginY ?? 0);
+    const cellWidthOutput = Number(canvas.dataset.gridCellWidth ?? canvas.width / N);
+    const cellHeightOutput = Number(canvas.dataset.gridCellHeight ?? canvas.height / M);
+    const canvasX = (clientX - rect.left) * scaleX - gridOriginX;
+    const canvasY = (clientY - rect.top) * scaleY - gridOriginY;
+
+    if (
+      canvasX < 0 ||
+      canvasY < 0 ||
+      canvasX >= cellWidthOutput * N ||
+      canvasY >= cellHeightOutput * M
+    ) {
+      setTooltipData(null);
+      return;
+    }
 
     const i = Math.floor(canvasX / cellWidthOutput);
     const j = Math.floor(canvasY / cellHeightOutput);
@@ -1952,42 +2109,7 @@ export default function Home() {
         // Only update if state changes
         if (newCellData.key !== previousKey || newCellData.isExternal !== wasExternal) {
           newPixelData[j][i] = newCellData;
-          setMappedPixelData(newPixelData);
-
-          // Update color counts
-          if (colorCounts) {
-            const newColorCounts = { ...colorCounts };
-            let newTotalCount = totalBeadCount;
-
-            // 处理之前颜色的减少（使用hex值）
-            if (!wasExternal && previousKey !== TRANSPARENT_KEY) {
-              const previousCell = mappedPixelData[j][i];
-              const previousHex = previousCell?.color?.toUpperCase();
-              if (previousHex && newColorCounts[previousHex]) {
-                newColorCounts[previousHex].count--;
-                if (newColorCounts[previousHex].count <= 0) {
-                  delete newColorCounts[previousHex];
-              }
-              newTotalCount--;
-              }
-            }
-
-            // 处理新颜色的增加（使用hex值）
-            if (!newCellData.isExternal && newCellData.key !== TRANSPARENT_KEY) {
-              const newHex = newCellData.color.toUpperCase();
-              if (!newColorCounts[newHex]) {
-                newColorCounts[newHex] = {
-                  count: 0,
-                  color: newHex
-                };
-              }
-              newColorCounts[newHex].count++;
-              newTotalCount++;
-            }
-
-            setColorCounts(newColorCounts);
-            setTotalBeadCount(newTotalCount);
-          }
+          updatePixelDataAndCounts(newPixelData);
         }
         
         // 上色操作后隐藏提示
@@ -2302,31 +2424,7 @@ export default function Home() {
     }
 
     if (replaceCount > 0) {
-      // 更新像素数据
-      setMappedPixelData(newPixelData);
-
-      // 重新计算颜色统计
-      if (colorCounts) {
-        const newColorCounts: { [hexKey: string]: { count: number; color: string } } = {};
-        let newTotalCount = 0;
-
-        newPixelData.flat().forEach(cell => {
-          if (cell && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
-            const cellHex = cell.color.toUpperCase();
-            if (!newColorCounts[cellHex]) {
-              newColorCounts[cellHex] = {
-                count: 0,
-                color: cellHex
-              };
-            }
-            newColorCounts[cellHex].count++;
-            newTotalCount++;
-          }
-        });
-
-        setColorCounts(newColorCounts);
-        setTotalBeadCount(newTotalCount);
-      }
+      updatePixelDataAndCounts(newPixelData);
 
       console.log(`颜色替换完成：将 ${replaceCount} 个 ${sourceColor.key} 替换为 ${targetColor.key}`);
     }
@@ -2339,6 +2437,24 @@ export default function Home() {
     
     // 清除高亮
     setHighlightColorKey(null);
+  };
+
+  const handleReplaceSelectedColorWithTarget = () => {
+    if (!selectedCellAction || !cellReplaceTargetHex) return;
+
+    const targetColor = currentGridColors.find(color => color.color.toUpperCase() === cellReplaceTargetHex.toUpperCase());
+    if (!targetColor || targetColor.color.toUpperCase() === selectedCellAction.color.toUpperCase()) return;
+
+    handleColorReplace(
+      {
+        key: selectedCellAction.key,
+        color: selectedCellAction.color,
+      },
+      targetColor
+    );
+    setSelectedCellAction(null);
+    setCellReplaceTargetHex('');
+    setTooltipData(null);
   };
 
   // 生成完整色板数据（用户自定义色板中选中的所有颜色）
@@ -2520,7 +2636,13 @@ export default function Home() {
           <p className="mt-4 text-base sm:text-lg font-light text-gray-600 dark:text-gray-300 max-w-lg mx-auto text-center tracking-[0.1em] leading-relaxed">
             AI帮帮忙，像素创意更简单
           </p>
-          <div className="mt-5 flex justify-center">
+          <div className="mt-5 flex flex-wrap justify-center gap-2">
+            <a
+              href="/batch"
+              className="inline-flex min-h-11 items-center justify-center rounded-full bg-gradient-to-r from-sky-500 to-blue-600 px-6 py-2.5 text-sm font-black text-white shadow-md transition hover:-translate-y-0.5 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
+            >
+              批量生成
+            </a>
             <a
               href="/gallery"
               className="inline-flex min-h-11 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-pink-500 px-6 py-2.5 text-sm font-black text-white shadow-md transition hover:-translate-y-0.5 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-orange-400 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
@@ -2794,6 +2916,36 @@ export default function Home() {
               {/* Canvas Preview Container */}
               {/* Apply dark mode styles */}
               <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-md border border-gray-100 dark:border-gray-700">
+                {mappedPixelData && gridDimensions && (
+                  <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleOpenFullscreenEditor}
+                        disabled={!hasUsablePattern}
+                        className="min-h-9 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-bold text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+                      >
+                        全屏编辑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleUndoEdit}
+                        disabled={editHistory.length === 0}
+                        className="min-h-9 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-bold text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+                      >
+                        撤回
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePatternPreviewRequest}
+                        disabled={!hasUsablePattern || isGeneratingPatternPreview}
+                        className="min-h-9 rounded-md border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-sm font-bold text-cyan-700 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-cyan-900/60 dark:bg-cyan-950/40 dark:text-cyan-200 dark:hover:bg-cyan-900/50"
+                      >
+                        {isGeneratingPatternPreview ? '生成中...' : '预览图纸'}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {/* 大画布提示信息 */}
                 {gridDimensions && gridDimensions.N > 100 && (
                   <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-xs text-blue-700 dark:text-blue-300 text-center">
@@ -2801,7 +2953,7 @@ export default function Home() {
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-blue-500 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
-                      <span>高精度网格 ({gridDimensions.N}×{gridDimensions.M}) - 画布已自动放大，可左右滚动、放大查看精细图像</span>
+                      <span>高精度网格 ({gridDimensions.N}×{gridDimensions.M}) - 可进入全屏编辑查看精细图像</span>
                     </div>
                   </div>
                 )}
@@ -2809,20 +2961,48 @@ export default function Home() {
                 <div className="flex justify-center mb-3 sm:mb-4 bg-gray-100 dark:bg-gray-700 p-2 rounded-lg overflow-x-auto overflow-y-hidden"
                      style={{ minHeight: '150px' }}>
                   {/* PixelatedPreviewCanvas component needs internal changes for dark mode drawing */}
-                  <PixelatedPreviewCanvas
-                    canvasRef={pixelatedCanvasRef}
-                    mappedPixelData={mappedPixelData}
-                    gridDimensions={gridDimensions}
-                    isManualColoringMode={isManualColoringMode}
-                    onInteraction={handleCanvasInteraction}
-                    highlightColorKey={highlightColorKey}
-                    onHighlightComplete={handleHighlightComplete}
-                    selectionMode={regionSelectionMode}
-                    selectedRegionCells={selectedRegionCells}
-                    onRegionSelectionComplete={handleRegionSelectionComplete}
-                  />
+                  {isEditorOverlayOpen ? (
+                    <div className="flex min-h-[180px] w-full items-center justify-center rounded-lg border border-dashed border-gray-300 bg-white/70 px-4 py-8 text-center text-sm font-semibold text-gray-500 dark:border-gray-600 dark:bg-gray-800/60 dark:text-gray-300">
+                      图纸正在弹窗中编辑，关闭弹窗后会回到这里继续操作。
+                    </div>
+                  ) : (
+                    <PixelatedPreviewCanvas
+                      canvasRef={pixelatedCanvasRef}
+                      mappedPixelData={mappedPixelData}
+                      gridDimensions={gridDimensions}
+                      isManualColoringMode={isManualColoringMode}
+                      onInteraction={handleCanvasInteraction}
+                      highlightColorKey={highlightColorKey}
+                      onHighlightComplete={handleHighlightComplete}
+                      selectionMode={regionSelectionMode}
+                      selectedRegionCells={selectedRegionCells}
+                      onRegionSelectionComplete={handleRegionSelectionComplete}
+                      displayScale={1}
+                    />
+                  )}
                 </div>
               </div>
+              {batchReturnInfo && mappedPixelData && gridDimensions && (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 shadow-sm dark:border-amber-900/60 dark:bg-amber-950/30">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-amber-900 dark:text-amber-100">
+                        正在精修：{batchReturnInfo.fileName}
+                      </div>
+                      <div className="mt-1 text-xs text-amber-700 dark:text-amber-200">
+                        返回后会保留批量队列，并更新当前这张图纸。
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveAndReturnToBatch}
+                      className="min-h-11 shrink-0 rounded-lg bg-amber-500 px-4 py-2 text-sm font-black text-white shadow-sm transition hover:bg-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
+                    >
+                      保存并返回批量页
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div> // This closes the main div started after originalImageSrc check
         )}
@@ -3062,28 +3242,10 @@ export default function Home() {
 
         {/* ++ HIDE Download Buttons in manual mode ++ */}
         {!isManualColoringMode && originalImageSrc && mappedPixelData && (
-            <div className="w-full md:max-w-2xl mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <button
-                onClick={handlePatternPreviewRequest}
-                disabled={!mappedPixelData || !gridDimensions || gridDimensions.N === 0 || gridDimensions.M === 0 || activeBeadPalette.length === 0 || isGeneratingPatternPreview}
-                className="w-full py-2.5 px-4 bg-gradient-to-r from-cyan-500 to-sky-600 text-white text-sm sm:text-base rounded-lg hover:from-cyan-600 hover:to-sky-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 transition-all duration-300 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg hover:translate-y-[-1px] disabled:hover:translate-y-0 disabled:hover:shadow-md"
-               >
-                {isGeneratingPatternPreview ? (
-                  <svg className="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12 18 18.75 12 18.75 2.25 12 2.25 12z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                )}
-                {isGeneratingPatternPreview ? '生成预览中...' : '预览图纸效果'}
-              </button>
+            <div className="w-full md:max-w-2xl mt-4">
               <button
                 onClick={() => setIsDownloadSettingsOpen(true)}
-                disabled={!mappedPixelData || !gridDimensions || gridDimensions.N === 0 || gridDimensions.M === 0 || activeBeadPalette.length === 0}
+                disabled={!hasUsablePattern}
                 className="w-full py-2.5 px-4 bg-gradient-to-r from-green-500 to-green-600 text-white text-sm sm:text-base rounded-lg hover:from-green-600 hover:to-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition-all duration-300 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg hover:translate-y-[-1px] disabled:hover:translate-y-0 disabled:hover:shadow-md"
                >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
@@ -3175,6 +3337,36 @@ export default function Home() {
                   删除同色全部
                 </button>
               </div>
+              {currentGridColors.length > 1 && (
+                <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/70">
+                  <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300">
+                    替换同色为
+                  </label>
+                  <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                    <select
+                      value={cellReplaceTargetHex}
+                      onChange={(event) => setCellReplaceTargetHex(event.target.value)}
+                      className="h-10 min-w-0 rounded-md border border-gray-300 bg-white px-2 text-sm font-semibold text-gray-800 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                    >
+                      {currentGridColors
+                        .filter(color => color.color.toUpperCase() !== selectedCellAction.color.toUpperCase())
+                        .map(color => (
+                          <option key={color.color} value={color.color.toUpperCase()}>
+                            {color.key} {color.color.toUpperCase()}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handleReplaceSelectedColorWithTarget}
+                      disabled={!cellReplaceTargetHex}
+                      className="min-h-10 rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      替换
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
          )}
 
@@ -3386,44 +3578,252 @@ export default function Home() {
         </div>
       )}
 
-      {isPatternPreviewOpen && patternPreviewSrc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm sm:p-4">
-          <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-gray-900">
-            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700 sm:px-6">
+      {isPatternPreviewOpen && mappedPixelData && gridDimensions && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm sm:p-4">
+          <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-gray-900">
+            <div className="flex flex-col gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between sm:px-6">
               <div>
                 <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">图纸效果预览</h3>
-                <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">当前下载设置生成的最终图纸效果</p>
+                <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">可直接点选图纸删除、替换同色，下载时会按当前图纸生成最终效果</p>
               </div>
-              <button
-                onClick={() => setIsPatternPreviewOpen(false)}
-                className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-                aria-label="关闭预览"
-              >
-                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPreviewZoom(value => Math.max(0.75, Number((value - 0.25).toFixed(2))))}
+                  disabled={previewZoom <= 0.75}
+                  className="min-h-9 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-bold text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+                >
+                  -
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewZoom(1)}
+                  className="min-h-9 min-w-16 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-bold text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+                >
+                  {Math.round(previewZoom * 100)}%
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewZoom(value => Math.min(3, Number((value + 0.25).toFixed(2))))}
+                  disabled={previewZoom >= 3}
+                  className="min-h-9 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-bold text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRegionSelectionModeChange('rectangle')}
+                  className={`min-h-9 rounded-md px-3 py-1.5 text-sm font-bold transition-colors ${
+                    regionSelectionMode === 'rectangle'
+                      ? 'bg-red-600 text-white shadow-sm'
+                      : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  框选删除
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRegionSelectionModeChange('lasso')}
+                  className={`min-h-9 rounded-md px-3 py-1.5 text-sm font-bold transition-colors ${
+                    regionSelectionMode === 'lasso'
+                      ? 'bg-red-600 text-white shadow-sm'
+                      : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  圈选删除
+                </button>
+                <button
+                  type="button"
+                  onClick={resetRegionSelection}
+                  className="min-h-9 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-bold text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+                  title="点击图纸中的色块后，可在底部面板替换同色"
+                >
+                  点选替换
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenFullscreenEditor}
+                  className="min-h-9 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-bold text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+                >
+                  全屏编辑
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUndoEdit}
+                  disabled={editHistory.length === 0}
+                  className="min-h-9 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-bold text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+                >
+                  撤回
+                </button>
+                <button
+                  onClick={() => {
+                    setTooltipData(null);
+                    setIsPatternPreviewOpen(false);
+                  }}
+                  className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  aria-label="关闭预览"
+                >
+                  <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-auto bg-gray-100 p-3 dark:bg-gray-950 sm:p-5">
-              <img
-                src={patternPreviewSrc}
-                alt="图纸效果预览"
-                className="mx-auto h-auto max-w-full rounded-lg bg-white shadow-lg"
-              />
+              <div className={`flex ${previewZoom > 1 ? 'justify-start' : 'justify-center'} min-h-full rounded-lg bg-gray-200 p-2 dark:bg-gray-800`}>
+                <PixelatedPreviewCanvas
+                  canvasRef={pixelatedCanvasRef}
+                  mappedPixelData={mappedPixelData}
+                  gridDimensions={gridDimensions}
+                  isManualColoringMode={isManualColoringMode}
+                  onInteraction={handleCanvasInteraction}
+                  highlightColorKey={highlightColorKey}
+                  onHighlightComplete={handleHighlightComplete}
+                  selectionMode={regionSelectionMode}
+                  selectedRegionCells={selectedRegionCells}
+                  onRegionSelectionComplete={handleRegionSelectionComplete}
+                  displayScale={previewZoom}
+                  renderMode="pattern"
+                  downloadOptions={downloadOptions}
+                  colorCounts={colorCounts}
+                  totalBeadCount={totalBeadCount}
+                  selectedColorSystem={selectedColorSystem}
+                />
+              </div>
             </div>
             <div className="flex flex-col gap-2 border-t border-gray-200 px-4 py-3 dark:border-gray-700 sm:flex-row sm:justify-end sm:px-6">
               <button
-                onClick={() => setIsPatternPreviewOpen(false)}
+                onClick={() => {
+                  setTooltipData(null);
+                  setIsPatternPreviewOpen(false);
+                }}
                 className="rounded-lg px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
               >
                 关闭
               </button>
               <button
                 onClick={handleDownloadPatternPreview}
-                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-green-700"
+                disabled={isGeneratingPatternPreview}
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                下载当前预览
+                {isGeneratingPatternPreview ? '生成下载中...' : '下载当前预览'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isFullscreenEditorOpen && mappedPixelData && gridDimensions && (
+        <div className="fixed inset-0 z-30 flex flex-col bg-gray-950 text-white">
+          <div className="flex flex-col gap-3 border-b border-white/10 bg-gray-900 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+            <div>
+              <h3 className="text-base font-semibold">全屏编辑</h3>
+              <p className="mt-0.5 text-xs text-gray-300">可放大后直接点选删除、替换同色，关闭后回到工具页继续操作</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPreviewZoom(value => Math.max(0.75, Number((value - 0.25).toFixed(2))))}
+                disabled={previewZoom <= 0.75}
+                className="min-h-9 rounded-md border border-white/20 bg-white/10 px-3 py-1.5 text-sm font-bold text-white hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                -
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewZoom(1)}
+                className="min-h-9 min-w-16 rounded-md border border-white/20 bg-white/10 px-3 py-1.5 text-sm font-bold text-white hover:bg-white/15"
+              >
+                {Math.round(previewZoom * 100)}%
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewZoom(value => Math.min(3, Number((value + 0.25).toFixed(2))))}
+                disabled={previewZoom >= 3}
+                className="min-h-9 rounded-md border border-white/20 bg-white/10 px-3 py-1.5 text-sm font-bold text-white hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRegionSelectionModeChange('rectangle')}
+                className={`min-h-9 rounded-md px-3 py-1.5 text-sm font-bold transition-colors ${
+                  regionSelectionMode === 'rectangle'
+                    ? 'bg-red-600 text-white shadow-sm'
+                    : 'border border-white/20 bg-white/10 text-white hover:bg-white/15'
+                }`}
+              >
+                框选删除
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRegionSelectionModeChange('lasso')}
+                className={`min-h-9 rounded-md px-3 py-1.5 text-sm font-bold transition-colors ${
+                  regionSelectionMode === 'lasso'
+                    ? 'bg-red-600 text-white shadow-sm'
+                    : 'border border-white/20 bg-white/10 text-white hover:bg-white/15'
+                }`}
+              >
+                圈选删除
+              </button>
+              <button
+                type="button"
+                onClick={resetRegionSelection}
+                className="min-h-9 rounded-md border border-white/20 bg-white/10 px-3 py-1.5 text-sm font-bold text-white hover:bg-white/15"
+                title="点击图纸中的色块后，可在底部面板替换同色"
+              >
+                点选替换
+              </button>
+              <button
+                type="button"
+                onClick={handleUndoEdit}
+                disabled={editHistory.length === 0}
+                className="min-h-9 rounded-md border border-white/20 bg-white/10 px-3 py-1.5 text-sm font-bold text-white hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                撤回
+              </button>
+              <button
+                type="button"
+                onClick={handlePatternPreviewRequest}
+                disabled={!hasUsablePattern || isGeneratingPatternPreview}
+                className="min-h-9 rounded-md border border-cyan-300/40 bg-cyan-500/20 px-3 py-1.5 text-sm font-bold text-cyan-100 hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isGeneratingPatternPreview ? '生成中...' : '预览图纸'}
+              </button>
+              <button
+                onClick={() => {
+                  setTooltipData(null);
+                  setIsFullscreenEditorOpen(false);
+                }}
+                className="rounded-lg p-2 text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+                aria-label="关闭全屏编辑"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto bg-gray-950 p-3 sm:p-5">
+            <div className={`flex ${previewZoom > 1 ? 'justify-start' : 'justify-center'} min-h-full rounded-lg bg-gray-900 p-2`}>
+              <PixelatedPreviewCanvas
+                canvasRef={pixelatedCanvasRef}
+                mappedPixelData={mappedPixelData}
+                gridDimensions={gridDimensions}
+                isManualColoringMode={isManualColoringMode}
+                onInteraction={handleCanvasInteraction}
+                highlightColorKey={highlightColorKey}
+                onHighlightComplete={handleHighlightComplete}
+                selectionMode={regionSelectionMode}
+                selectedRegionCells={selectedRegionCells}
+                onRegionSelectionComplete={handleRegionSelectionComplete}
+                displayScale={previewZoom}
+                renderMode="pattern"
+                downloadOptions={downloadOptions}
+                colorCounts={colorCounts}
+                totalBeadCount={totalBeadCount}
+                selectedColorSystem={selectedColorSystem}
+              />
             </div>
           </div>
         </div>
