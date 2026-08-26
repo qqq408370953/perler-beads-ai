@@ -157,6 +157,7 @@ export default function Home() {
   const [regionSelectionMode, setRegionSelectionMode] = useState<RegionSelectionMode>('none');
   const [selectedRegionCells, setSelectedRegionCells] = useState<RegionSelectionCell[]>([]);
   const [selectedRegionReplaceTargetHex, setSelectedRegionReplaceTargetHex] = useState<string>('');
+  const [isRegionColorPickerOpen, setIsRegionColorPickerOpen] = useState<boolean>(false);
   const [remapTrigger, setRemapTrigger] = useState<number>(0);
   const [isManualColoringMode, setIsManualColoringMode] = useState<boolean>(false);
   const [selectedColor, setSelectedColor] = useState<MappedPixel | null>(null);
@@ -377,6 +378,7 @@ export default function Home() {
   useEffect(() => {
     if (selectedRegionCells.length === 0) {
       setSelectedRegionReplaceTargetHex('');
+      setIsRegionColorPickerOpen(false);
       return;
     }
 
@@ -389,6 +391,13 @@ export default function Home() {
 
     setSelectedRegionReplaceTargetHex(currentGridColors[0]?.color.toUpperCase() ?? '');
   }, [currentGridColors, selectedRegionCells.length, selectedRegionReplaceTargetHex]);
+
+  const selectedRegionReplaceTarget = useMemo(() => {
+    if (!selectedRegionReplaceTargetHex) return null;
+    return currentGridColors.find(color => (
+      color.color.toUpperCase() === selectedRegionReplaceTargetHex.toUpperCase()
+    )) ?? null;
+  }, [currentGridColors, selectedRegionReplaceTargetHex]);
 
   const hasUsablePattern = Boolean(
     mappedPixelData &&
@@ -1942,6 +1951,7 @@ export default function Home() {
     setRegionSelectionMode('none');
     setSelectedRegionCells([]);
     setSelectedRegionReplaceTargetHex('');
+    setIsRegionColorPickerOpen(false);
   };
 
   const handleRegionSelectionModeChange = (mode: RegionSelectionMode) => {
@@ -1949,6 +1959,7 @@ export default function Home() {
       const nextMode = prevMode === mode ? 'none' : mode;
       setSelectedRegionCells([]);
       setSelectedRegionReplaceTargetHex('');
+      setIsRegionColorPickerOpen(false);
       setSelectedCellAction(null);
       setTooltipData(null);
       setIsEraseMode(false);
@@ -2018,7 +2029,7 @@ export default function Home() {
       updatePixelDataAndCounts(newPixelData);
     }
 
-    resetRegionSelection();
+    setIsRegionColorPickerOpen(false);
     setTooltipData(null);
     setSelectedCellAction(null);
   };
@@ -3360,26 +3371,75 @@ export default function Home() {
                     替换选区为
                   </label>
                   <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
-                    <select
-                      value={selectedRegionReplaceTargetHex}
-                      onChange={(event) => setSelectedRegionReplaceTargetHex(event.target.value)}
-                      className="h-10 min-w-0 rounded-md border border-gray-300 bg-white px-2 text-sm font-semibold text-gray-800 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
-                    >
-                      {currentGridColors.map(color => (
-                        <option key={color.color} value={color.color.toUpperCase()}>
-                          {color.key} {color.color.toUpperCase()}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="relative min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => setIsRegionColorPickerOpen(value => !value)}
+                        className="flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-2 text-left text-sm font-semibold text-gray-800 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span
+                            className="h-5 w-5 shrink-0 rounded border border-gray-300 shadow-inner dark:border-gray-600"
+                            style={{ backgroundColor: selectedRegionReplaceTarget?.color ?? '#FFFFFF' }}
+                          />
+                          <span className="min-w-0 truncate">
+                            {selectedRegionReplaceTarget
+                              ? `${selectedRegionReplaceTarget.key} ${selectedRegionReplaceTarget.color.toUpperCase()}`
+                              : '选择替换颜色'}
+                          </span>
+                        </span>
+                        <svg className={`h-4 w-4 shrink-0 transition-transform ${isRegionColorPickerOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                      {isRegionColorPickerOpen && (
+                        <div className="absolute bottom-full left-0 z-50 mb-2 max-h-64 w-full overflow-y-auto rounded-lg border border-gray-200 bg-white p-1 shadow-xl dark:border-gray-700 dark:bg-gray-900">
+                          {currentGridColors.map(color => {
+                            const colorHex = color.color.toUpperCase();
+                            const isSelectedTarget = colorHex === selectedRegionReplaceTargetHex.toUpperCase();
+
+                            return (
+                              <button
+                                key={color.color}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedRegionReplaceTargetHex(colorHex);
+                                  setIsRegionColorPickerOpen(false);
+                                }}
+                                className={`flex min-h-10 w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${
+                                  isSelectedTarget
+                                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-200'
+                                    : 'text-gray-800 hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-800'
+                                }`}
+                              >
+                                <span
+                                  className="h-6 w-6 shrink-0 rounded border border-gray-300 shadow-inner dark:border-gray-600"
+                                  style={{ backgroundColor: color.color }}
+                                />
+                                <span className="min-w-0 flex-1 truncate font-semibold">
+                                  {color.key}
+                                </span>
+                                <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+                                  {colorHex}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                     <button
                       type="button"
                       onClick={handleReplaceSelectedRegionCells}
-                      disabled={!selectedRegionReplaceTargetHex}
+                      disabled={!selectedRegionReplaceTarget}
                       className="min-h-10 rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      替换
+                      确认替换
                     </button>
                   </div>
+                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    选择颜色不会清空选区，点击确认后生效，可用撤回恢复。
+                  </p>
                 </div>
               )}
             </div>
