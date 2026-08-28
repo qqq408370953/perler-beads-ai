@@ -1,6 +1,7 @@
 import { GridDownloadOptions } from '../types/downloadTypes';
 import { MappedPixel, PaletteColor } from './pixelation';
 import { getMappedColorDisplayKey, getColorKeyByHex, ColorSystem } from './colorSystemUtils';
+import { cropPixelDataToContent } from './pixelEditingUtils';
 
 // 用于获取对比色的工具函数 - 从page.tsx复制
 function getContrastColor(hex: string): string {
@@ -62,7 +63,9 @@ export function exportCsvData({
     return;
   }
 
-  const { N, M } = gridDimensions;
+  const croppedPattern = cropPixelDataToContent(mappedPixelData, 1);
+  const exportPixelData = croppedPattern.mappedPixelData;
+  const { N, M } = croppedPattern.gridDimensions;
   
   // 生成CSV内容，每行代表图纸的一行
   const csvLines: string[] = [];
@@ -70,7 +73,7 @@ export function exportCsvData({
   for (let row = 0; row < M; row++) {
     const rowData: string[] = [];
     for (let col = 0; col < N; col++) {
-      const cellData = mappedPixelData[row][col];
+      const cellData = exportPixelData[row][col];
       if (cellData && !cellData.isExternal) {
         // 内部单元格，记录hex颜色值
         rowData.push(cellData.color);
@@ -291,7 +294,10 @@ export async function generateDownloadImagePreview({
   
   // 主要下载处理函数
   const processDownload = async (): Promise<DownloadImagePreviewResult | null> => {
-    const { N, M } = gridDimensions; // 此时已确保gridDimensions不为null
+    // 导出前再执行一次裁切，保证旧会话、CSV 导入或编辑后的数据也只保留一圈空格。
+    const croppedPattern = cropPixelDataToContent(mappedPixelData, 1);
+    const downloadPixelData = croppedPattern.mappedPixelData;
+    const { N, M } = croppedPattern.gridDimensions;
     const downloadCellSize = 30;
   
     // 从下载选项中获取设置
@@ -471,7 +477,7 @@ export async function generateDownloadImagePreview({
     // 绘制所有单元格
     for (let j = 0; j < M; j++) {
       for (let i = 0; i < N; i++) {
-        const cellData = mappedPixelData[j][i];
+        const cellData = downloadPixelData[j][i];
         // 计算绘制位置，考虑额外边距和标题栏高度
         const drawX = gridOriginX + i * downloadCellSize;
         const drawY = gridOriginY + j * downloadCellSize;

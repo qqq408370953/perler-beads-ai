@@ -1,4 +1,4 @@
-import { MappedPixel } from './pixelation';
+import type { MappedPixel } from './pixelation';
 
 // 透明键定义
 export const TRANSPARENT_KEY = 'ERASE';
@@ -9,6 +9,63 @@ export const transparentColorData: MappedPixel = {
   color: '#FFFFFF', 
   isExternal: true 
 };
+
+/**
+ * 将网格裁切到有效拼豆内容，并在四周保留指定数量的透明格。
+ *
+ * 生成结果可能因为原图比例或去背景留下大块空白区域。这里以所有
+ * 非透明、非外部格子的包围盒为准重新构造网格，确保导出、预览和
+ * 后续编辑使用相同的紧凑尺寸。
+ */
+export function cropPixelDataToContent(
+  pixelData: MappedPixel[][],
+  padding = 1
+): { mappedPixelData: MappedPixel[][]; gridDimensions: { N: number; M: number } } {
+  const safePadding = Math.max(0, Math.floor(padding));
+  let minRow = Infinity;
+  let maxRow = -1;
+  let minCol = Infinity;
+  let maxCol = -1;
+
+  pixelData.forEach((row, rowIndex) => {
+    row.forEach((cell, colIndex) => {
+      if (!cell || cell.isExternal || cell.key === TRANSPARENT_KEY) return;
+      minRow = Math.min(minRow, rowIndex);
+      maxRow = Math.max(maxRow, rowIndex);
+      minCol = Math.min(minCol, colIndex);
+      maxCol = Math.max(maxCol, colIndex);
+    });
+  });
+
+  // 没有有效拼豆时返回最小空网格，避免保留整张原图大小的空白区域。
+  if (maxRow < minRow || maxCol < minCol) {
+    return {
+      mappedPixelData: [[{ ...transparentColorData }]],
+      gridDimensions: { N: 1, M: 1 },
+    };
+  }
+
+  const contentWidth = maxCol - minCol + 1;
+  const contentHeight = maxRow - minRow + 1;
+  const N = contentWidth + safePadding * 2;
+  const M = contentHeight + safePadding * 2;
+  const croppedData = Array.from({ length: M }, () => (
+    Array.from({ length: N }, () => ({ ...transparentColorData }))
+  ));
+
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
+      const cell = pixelData[row]?.[col];
+      if (!cell) continue;
+      croppedData[row - minRow + safePadding][col - minCol + safePadding] = { ...cell };
+    }
+  }
+
+  return {
+    mappedPixelData: croppedData,
+    gridDimensions: { N, M },
+  };
+}
 
 /**
  * 洪水填充擦除算法
@@ -187,4 +244,4 @@ export function recalculateColorStats(
   });
 
   return { colorCounts, totalCount };
-} 
+}

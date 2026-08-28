@@ -113,7 +113,7 @@ import FloatingToolbar from '../components/FloatingToolbar';
 import MagnifierTool from '../components/MagnifierTool';
 import MagnifierSelectionOverlay from '../components/MagnifierSelectionOverlay';
 import { loadPaletteSelections, savePaletteSelections, presetToSelections, PaletteSelections } from '../utils/localStorageUtils';
-import { TRANSPARENT_KEY, transparentColorData } from '../utils/pixelEditingUtils';
+import { cropPixelDataToContent, TRANSPARENT_KEY, transparentColorData } from '../utils/pixelEditingUtils';
 
 // 1. 导入新的 DonationModal 组件
 import DonationModal from '../components/DonationModal';
@@ -546,8 +546,10 @@ export default function Home() {
     const handoff = consumeSingleToolHandoff();
     if (!handoff) return;
 
+    const croppedHandoff = cropPixelDataToContent(handoff.result.mappedPixelData, 1);
+
     skipAutoPixelateRef.current = true;
-    const applyCanvasSize = () => resizePixelatedCanvasForGrid(handoff.result.gridDimensions);
+    const applyCanvasSize = () => resizePixelatedCanvasForGrid(croppedHandoff.gridDimensions);
 
     if (!applyCanvasSize()) {
       window.requestAnimationFrame(applyCanvasSize);
@@ -568,8 +570,8 @@ export default function Home() {
     setMaxColorCountInput(handoff.options.maxColorCount.toString());
     setPixelationMode(handoff.options.pixelationMode);
     setSelectedColorSystem(handoff.options.selectedColorSystem);
-    setMappedPixelData(handoff.result.mappedPixelData);
-    setGridDimensions(handoff.result.gridDimensions);
+    setMappedPixelData(croppedHandoff.mappedPixelData);
+    setGridDimensions(croppedHandoff.gridDimensions);
     setColorCounts(handoff.result.colorCounts);
     setTotalBeadCount(handoff.result.totalBeadCount);
     setInitialGridColorKeys(new Set(Object.keys(handoff.result.colorCounts)));
@@ -770,19 +772,22 @@ export default function Home() {
       // 处理CSV文件
       console.log('正在导入CSV文件...');
       importCsvData(file)
-        .then(({ mappedPixelData, gridDimensions }) => {
-          console.log(`成功导入CSV文件: ${gridDimensions.N}x${gridDimensions.M}`);
+        .then(({ mappedPixelData }) => {
+          const croppedImport = cropPixelDataToContent(mappedPixelData, 1);
+          const importedPixelData = croppedImport.mappedPixelData;
+          const importedGridDimensions = croppedImport.gridDimensions;
+          console.log(`成功导入CSV文件: ${importedGridDimensions.N}x${importedGridDimensions.M}`);
           
           // 设置导入的数据
-          setMappedPixelData(mappedPixelData);
-          setGridDimensions(gridDimensions);
+          setMappedPixelData(importedPixelData);
+          setGridDimensions(importedGridDimensions);
           setOriginalImageSrc(null); // CSV导入时没有原始图片
           
           // 计算颜色统计
           const colorCountsMap: ColorCountMap = {};
           let totalCount = 0;
           
-          mappedPixelData.forEach(row => {
+          importedPixelData.forEach(row => {
             row.forEach(cell => {
               if (cell && !cell.isExternal) {
                 const colorKey = cell.color.toUpperCase();
@@ -804,7 +809,7 @@ export default function Home() {
           setInitialGridColorKeys(new Set(Object.keys(colorCountsMap)));
           
           // 根据mappedPixelData生成合成的originalImageSrc
-          const syntheticImageSrc = generateSyntheticImageFromPixelData(mappedPixelData, gridDimensions);
+          const syntheticImageSrc = generateSyntheticImageFromPixelData(importedPixelData, importedGridDimensions);
           
           setOriginalImageSrc(syntheticImageSrc);
           
@@ -814,10 +819,10 @@ export default function Home() {
           setIsEraseMode(false);
           
           // 设置格子数量为导入的尺寸，避免重新映射时尺寸被修改
-          setGranularity(gridDimensions.N);
-          setGranularityInput(gridDimensions.N.toString());
+          setGranularity(importedGridDimensions.N);
+          setGranularityInput(importedGridDimensions.N.toString());
           
-          alert(`成功导入CSV文件！图纸尺寸：${gridDimensions.N}x${gridDimensions.M}，共使用${Object.keys(colorCountsMap).length}种颜色。`);
+          alert(`成功导入CSV文件！图纸尺寸：${importedGridDimensions.N}x${importedGridDimensions.M}，共使用${Object.keys(colorCountsMap).length}种颜色。`);
         })
         .catch(error => {
           console.error('CSV导入失败:', error);
@@ -1286,17 +1291,22 @@ export default function Home() {
         }
       }
 
-      const finalPixelData = await removeBackgroundFromPixelData(
+      const backgroundRemovedData = await removeBackgroundFromPixelData(
         limitedData,
         { N, M },
         { silent: true }
       ) ?? limitedData;
+      const {
+        mappedPixelData: finalPixelData,
+        gridDimensions: finalGridDimensions,
+      } = cropPixelDataToContent(backgroundRemovedData, 1);
 
       // --- 绘制和状态更新 ---
       if (pixelatedCanvasRef.current) {
         setEditHistory([]);
         setMappedPixelData(finalPixelData);
-        setGridDimensions({ N, M });
+        setGridDimensions(finalGridDimensions);
+        resizePixelatedCanvasForGrid(finalGridDimensions);
 
         const counts: ColorCountMap = {};
         let totalCount = 0;

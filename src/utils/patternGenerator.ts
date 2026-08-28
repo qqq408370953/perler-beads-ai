@@ -11,7 +11,7 @@ import {
   ColorSystem,
   getMardToHexMapping,
 } from './colorSystemUtils';
-import { TRANSPARENT_KEY, transparentColorData } from './pixelEditingUtils';
+import { cropPixelDataToContent, TRANSPARENT_KEY, transparentColorData } from './pixelEditingUtils';
 import { loadPaletteSelections, PaletteSelections, presetToSelections } from './localStorageUtils';
 
 export interface PatternGenerationOptions {
@@ -508,12 +508,16 @@ export async function generatePatternFromImage(
   );
   const mergedData = mergeSimilarColors(initialData, dimensions, palette, options.similarityThreshold);
   const limitedData = limitColorCount(mergedData, dimensions, palette, options.maxColorCount);
-  const finalData = await removeBackgroundFromPixelData(limitedData, dimensions, imageSrc);
+  const backgroundRemovedData = await removeBackgroundFromPixelData(limitedData, dimensions, imageSrc);
+  const {
+    mappedPixelData: finalData,
+    gridDimensions: croppedDimensions,
+  } = cropPixelDataToContent(backgroundRemovedData, 1);
   const stats = calculatePatternStats(finalData);
 
   return {
     mappedPixelData: finalData,
-    gridDimensions: dimensions,
+    gridDimensions: croppedDimensions,
     ...stats,
   };
 }
