@@ -1,4 +1,5 @@
 import React from 'react';
+import MobileSafeRange from './MobileSafeRange';
 
 interface SettingsPanelProps {
   guidanceMode: 'nearest' | 'largest' | 'edge-first';
@@ -134,13 +135,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       分割间隔
                     </label>
                     <div className="flex items-center space-x-3">
-                      <input
-                        type="range"
-                        min="5"
-                        max="20"
+                      <MobileSafeRange
+                        min={5}
+                        max={20}
                         value={gridSectionInterval}
-                        onChange={(e) => onGridSectionIntervalChange(parseInt(e.target.value))}
+                        onValueChange={onGridSectionIntervalChange}
                         className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        ariaLabel="分割间隔"
                       />
                       <span className="text-sm font-medium text-gray-700 min-w-[3rem]">
                         {gridSectionInterval} 格

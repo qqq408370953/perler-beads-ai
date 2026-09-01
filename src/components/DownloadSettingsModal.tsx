@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { GridDownloadOptions } from '../types/downloadTypes';
+import MobileSafeRange from './MobileSafeRange';
 
 // 定义可选的网格线颜色
 const gridLineColorOptions = [
@@ -94,14 +95,14 @@ const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
                     网格线间隔 (每 N 格画一条线)
                   </label>
                   <div className="flex items-center justify-between space-x-3">
-                    <input 
-                      type="range" 
-                      min="5" 
-                      max="20" 
-                      step="1"
+                    <MobileSafeRange
+                      min={5}
+                      max={20}
+                      step={1}
                       value={tempOptions.gridInterval}
-                      onChange={(e) => handleOptionChange('gridInterval', parseInt(e.target.value))}
+                      onValueChange={(value) => handleOptionChange('gridInterval', value)}
                       className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                      ariaLabel="网格线间隔"
                     />
                     <span className="flex items-center justify-center min-w-[40px] text-sm font-medium text-gray-900 dark:text-gray-100">
                       {tempOptions.gridInterval}

@@ -2,6 +2,7 @@
 
 import type { CSSProperties } from 'react';
 import type { ColorSystem } from '../utils/colorSystemUtils';
+import MobileSafeRange from './MobileSafeRange';
 
 export type PatternPresetId = 'economy' | 'balanced' | 'portrait' | 'detailed' | 'large';
 
@@ -85,24 +86,26 @@ function RangeCard({
   return (
     <section className={cardClass}>
       <SettingHeader title={title} value={valueLabel} />
-      <input
-        type="range"
+      <MobileSafeRange
         min={min}
         max={max}
         step={step}
         value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        onValueChange={onChange}
         className="pattern-settings-range"
         style={{
           '--range-accent': accent,
           '--range-progress': `${progress}%`,
         } as CSSProperties}
-        aria-label={title}
+        ariaLabel={title}
       />
       <div className="mt-1 flex justify-between text-xs font-medium text-[#aaa297] dark:text-gray-400">
         <span>{lowLabel}</span>
         <span>{highLabel}</span>
       </div>
+      <p className="mt-2 text-center text-[11px] font-semibold text-[#aaa297] sm:hidden dark:text-gray-400">
+        横向拖动调节 · 纵向滑动不会改值
+      </p>
     </section>
   );
 }

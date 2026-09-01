@@ -142,7 +142,7 @@ export default function Home() {
   const [brightness, setBrightness] = useState<number>(0);
   const [isHorizontalMirrored, setIsHorizontalMirrored] = useState<boolean>(false);
   const [isVerticalMirrored, setIsVerticalMirrored] = useState<boolean>(false);
-  const [removeBackgroundEnabled, setRemoveBackgroundEnabled] = useState<boolean>(false);
+  const [removeBackgroundEnabled, setRemoveBackgroundEnabled] = useState<boolean>(true);
   const [outlineEnabled, setOutlineEnabled] = useState<boolean>(false);
   // 添加像素化模式状态
   const [pixelationMode, setPixelationMode] = useState<PixelationMode>(PixelationMode.Dominant); // 默认为卡通模式
@@ -887,7 +887,7 @@ export default function Home() {
     setBrightness(0);
     setIsHorizontalMirrored(false);
     setIsVerticalMirrored(false);
-    setRemoveBackgroundEnabled(false);
+    setRemoveBackgroundEnabled(true);
     setOutlineEnabled(false);
     setRemapTrigger(prev => prev + 1); // Trigger full remap for new image
     
