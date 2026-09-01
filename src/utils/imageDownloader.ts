@@ -1,7 +1,7 @@
 import { GridDownloadOptions } from '../types/downloadTypes';
 import { MappedPixel, PaletteColor } from './pixelation';
 import { getMappedColorDisplayKey, getColorKeyByHex, ColorSystem } from './colorSystemUtils';
-import { cropPixelDataToContent } from './pixelEditingUtils';
+import { cropPixelDataToContent, TRANSPARENT_KEY } from './pixelEditingUtils';
 
 // 用于获取对比色的工具函数 - 从page.tsx复制
 function getContrastColor(hex: string): string {
@@ -266,6 +266,14 @@ export function releaseDownloadImagePreviewUrl(imageUrl?: string | null): void {
   }
 }
 
+function getDownloadCellSize(N: number, M: number): number {
+  const largestSide = Math.max(N, M);
+  if (largestSide <= 64) return 28;
+  if (largestSide <= 110) return 20;
+  if (largestSide <= 180) return 14;
+  return 10;
+}
+
 export async function saveImageBlob(blob: Blob, filename: string): Promise<void> {
   const dataURL = await blobToDataURL(blob);
   triggerDataUrlDownload(dataURL, filename);
@@ -282,410 +290,232 @@ export async function generateDownloadImagePreview({
   selectedColorSystem
 }: DownloadImageParams): Promise<DownloadImagePreviewResult | null> {
   if (!mappedPixelData || !gridDimensions || gridDimensions.N === 0 || gridDimensions.M === 0 || activeBeadPalette.length === 0) {
-    console.error("下载失败: 映射数据或尺寸无效。");
-    alert("无法生成图纸，数据未生成或无效。");
+    console.error('下载失败: 映射数据或尺寸无效。');
+    alert('无法生成图纸，数据未生成或无效。');
     return null;
   }
   if (!colorCounts) {
-    console.error("下载失败: 色号统计数据无效。");
-    alert("无法生成图纸，色号统计数据未生成或无效。");
+    console.error('下载失败: 色号统计数据无效。');
+    alert('无法生成图纸，色号统计数据未生成或无效。');
     return null;
   }
-  
-  // 主要下载处理函数
-  const processDownload = async (): Promise<DownloadImagePreviewResult | null> => {
-    // 导出前再执行一次裁切，保证旧会话、CSV 导入或编辑后的数据也只保留一圈空格。
-    const croppedPattern = cropPixelDataToContent(mappedPixelData, 1);
-    const downloadPixelData = croppedPattern.mappedPixelData;
-    const { N, M } = croppedPattern.gridDimensions;
-    const downloadCellSize = 30;
-  
-    // 从下载选项中获取设置
-    const { showGrid, gridInterval, showCoordinates, gridLineColor, includeStats, showCellNumbers = true } = options;
-  
-    // 设置坐标轴空间。坐标轴按格子逐格绘制，轴厚度略大于格子以容纳三位数。
-    const axisLabelSize = showCoordinates ? Math.max(downloadCellSize, Math.ceil(downloadCellSize * 1.35), 14) : 0;
-    
-    // 定义统计区域的基本参数
-    const statsPadding = 20;
-    let statsHeight = 0;
-    
-    // 预先计算用于字体大小的变量
-    const preCalcWidth = N * downloadCellSize + (axisLabelSize * 2);
-    const preCalcAvailableWidth = preCalcWidth - (statsPadding * 2);
-    
-    // 计算字体大小 - 与颜色统计区域保持一致
-    const baseStatsFontSize = 13;
-    const widthFactor = Math.max(0, preCalcAvailableWidth - 350) / 600;
-    const statsFontSize = Math.floor(baseStatsFontSize + (widthFactor * 10));
-    
-    // 计算额外边距，确保坐标数字完全显示（四边都需要）
-    const extraLeftMargin = showCoordinates ? Math.max(10, statsFontSize) : 0; // 左侧额外边距
-    const extraRightMargin = showCoordinates ? Math.max(10, statsFontSize) : 0; // 右侧额外边距
-    const extraTopMargin = showCoordinates ? Math.max(8, Math.floor(statsFontSize * 0.8)) : 0; // 顶部额外边距
-    const extraBottomMargin = showCoordinates ? Math.max(8, Math.floor(statsFontSize * 0.8)) : 0; // 底部额外边距
-    
-    // 计算网格尺寸
-    const gridWidth = N * downloadCellSize;
-    const gridHeight = M * downloadCellSize;
-    
-    const titleBarHeight = 0;
-    
-    // 计算统计区域的大小
-    if (includeStats && colorCounts) {
-      const colorKeys = Object.keys(colorCounts);
-      
-      // 统计区域顶部额外间距
-      const statsTopMargin = 24; // 与下方渲染时保持一致
-      
-      // 根据可用宽度动态计算列数
-      const numColumns = Math.max(1, Math.min(4, Math.floor(preCalcAvailableWidth / 250)));
-      
-      // 根据可用宽度动态计算样式参数，使用更积极的线性缩放
-      const baseSwatchSize = 18; // 略微增大基础大小
-      // baseStatsFontSize 和 statsFontSize 在前面已经计算了，这里不需要重复
-      // const baseItemPadding = 10;
-      
-      // 调整缩放公式，使大宽度更明显增大
-      // widthFactor 在前面已经计算了，这里不需要重复
-      const swatchSize = Math.floor(baseSwatchSize + (widthFactor * 20)); // 增大最大增量幅度
-      // statsFontSize 在前面已经计算了，这里不需要重复
-      // const itemPadding = Math.floor(baseItemPadding + (widthFactor * 12)); // 增大最大增量幅度 // 移除未使用的 itemPadding
-      
-      // 计算实际需要的行数
-      const numRows = Math.ceil(colorKeys.length / numColumns);
-      
-      // 计算单行高度 - 根据色块大小和内边距动态调整
-      const statsRowHeight = Math.max(swatchSize + 8, 25);
-      
-      // 标题和页脚高度
-      const titleHeight = 40; // 标题和分隔线的总高度
-      const footerHeight = 40; // 总计部分的高度
-      
-      // 计算统计区域的总高度 - 需要包含顶部间距
-      statsHeight = titleHeight + (numRows * statsRowHeight) + footerHeight + (statsPadding * 2) + statsTopMargin;
-    }
-  
-    // 调整画布大小，包含坐标轴和统计区域（四边都有坐标）
-    const downloadWidth = gridWidth + (axisLabelSize * 2) + extraLeftMargin + extraRightMargin;
-    let downloadHeight = titleBarHeight + gridHeight + (axisLabelSize * 2) + statsHeight + extraTopMargin + extraBottomMargin;
-  
-    let downloadCanvas = document.createElement('canvas');
-    downloadCanvas.width = downloadWidth;
-    downloadCanvas.height = downloadHeight;
-    const context = downloadCanvas.getContext('2d');
-    if (!context) {
-      console.error("下载失败: 无法创建临时 Canvas Context。");
-      alert("无法生成图纸。");
-      return null;
-    }
-    
-    // 使用非空的context变量
-    let ctx = context;
-    ctx.imageSmoothingEnabled = false;
-  
-    // 设置背景色
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, downloadWidth, downloadHeight);
-  
-    console.log(`Generating download grid image: ${downloadWidth}x${downloadHeight}, cell size: ${downloadCellSize}`);
-    const fontSize = Math.max(8, Math.floor(downloadCellSize * 0.4));
-    
-    const gridOriginX = extraLeftMargin + axisLabelSize;
-    const gridOriginY = titleBarHeight + extraTopMargin + axisLabelSize;
-    const topAxisY = titleBarHeight + extraTopMargin;
-    const bottomAxisY = gridOriginY + gridHeight;
-    const leftAxisX = extraLeftMargin;
-    const rightAxisX = gridOriginX + gridWidth;
-    const axisFillColor = '#A9473F';
-    const axisGridLineColor = '#6F2A26';
-    const axisTextColor = '#F8FAFC';
-    const baseGridLineColor = '#8A8A8A';
-    const majorGridLineColor = gridLineColor === '#555555' ? '#111111' : gridLineColor;
-    const backgroundCellColor = '#FAFAFA';
-    const baseGridLineWidth = downloadCellSize <= 10 ? 0.9 : 1;
-    const majorGridLineWidth = downloadCellSize <= 10 ? 2 : 2.4;
 
-    // 如果需要，先绘制坐标轴和网格背景
-    if (showCoordinates) {
-      const axisFontSize = Math.max(4, Math.min(10, Math.floor(downloadCellSize * 0.52)));
-      ctx.font = `bold ${axisFontSize}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+  const { N, M } = gridDimensions;
+  const cellSize = getDownloadCellSize(N, M);
+  const {
+    showGrid,
+    gridInterval,
+    showCoordinates,
+    gridLineColor,
+    includeStats,
+    showCellNumbers = true,
+  } = options;
+  const coordinateBand = showCoordinates ? Math.max(14, Math.ceil(cellSize * 0.72)) : 0;
+  const pagePadding = 12;
+  const headerHeight = Math.max(34, Math.min(46, Math.round(cellSize * 1.7)));
+  const gridWidth = N * cellSize;
+  const gridHeight = M * cellSize;
+  const sheetWidth = pagePadding * 2 + coordinateBand * 2 + gridWidth;
+  const colorKeys = Object.keys(colorCounts).sort(sortColorKeys);
+  const statsGap = includeStats && colorKeys.length > 0 ? 28 : 0;
+  const statsColumns = Math.max(1, Math.min(10, Math.floor((sheetWidth - pagePadding * 2) / 120)));
+  const statsRows = Math.ceil(colorKeys.length / statsColumns);
+  const statsHeight = includeStats && colorKeys.length > 0 ? 54 + statsRows * 68 + 34 : 0;
+  const sheetHeight = pagePadding * 2 + headerHeight + coordinateBand * 2 + gridHeight + statsGap + statsHeight;
+  const canvas = document.createElement('canvas');
+  canvas.width = sheetWidth;
+  canvas.height = sheetHeight;
+  const ctx = canvas.getContext('2d');
 
-      // 四角空白轴格
-      ctx.fillStyle = axisFillColor;
-      ctx.fillRect(leftAxisX, topAxisY, axisLabelSize, axisLabelSize);
-      ctx.fillRect(rightAxisX, topAxisY, axisLabelSize, axisLabelSize);
-      ctx.fillRect(leftAxisX, bottomAxisY, axisLabelSize, axisLabelSize);
-      ctx.fillRect(rightAxisX, bottomAxisY, axisLabelSize, axisLabelSize);
-      ctx.strokeStyle = axisGridLineColor;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(leftAxisX + 0.5, topAxisY + 0.5, axisLabelSize, axisLabelSize);
-      ctx.strokeRect(rightAxisX + 0.5, topAxisY + 0.5, axisLabelSize, axisLabelSize);
-      ctx.strokeRect(leftAxisX + 0.5, bottomAxisY + 0.5, axisLabelSize, axisLabelSize);
-      ctx.strokeRect(rightAxisX + 0.5, bottomAxisY + 0.5, axisLabelSize, axisLabelSize);
+  if (!ctx) {
+    alert('无法生成图纸。');
+    return null;
+  }
 
-      // X轴（顶部/底部）逐格数字
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      for (let i = 0; i < N; i++) {
-        const axisX = gridOriginX + (i * downloadCellSize);
-        const label = (i + 1).toString();
+  const sheetColor = '#FFFEF8';
+  const emptyCellColor = '#FFFCEE';
+  const minorLineColor = '#8D8980';
+  const outerLineColor = '#55524C';
+  const majorLineColor = gridLineColor || outerLineColor;
+  const originX = pagePadding + coordinateBand;
+  const originY = pagePadding + headerHeight + coordinateBand;
+  const gridBottom = originY + gridHeight;
 
-        ctx.fillStyle = axisFillColor;
-        ctx.fillRect(axisX, topAxisY, downloadCellSize, axisLabelSize);
-        ctx.fillRect(axisX, bottomAxisY, downloadCellSize, axisLabelSize);
-        ctx.strokeStyle = axisGridLineColor;
-        ctx.strokeRect(axisX + 0.5, topAxisY + 0.5, downloadCellSize, axisLabelSize);
-        ctx.strokeRect(axisX + 0.5, bottomAxisY + 0.5, downloadCellSize, axisLabelSize);
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = sheetColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        ctx.fillStyle = axisTextColor;
-        ctx.fillText(label, axisX + (downloadCellSize / 2), topAxisY + (axisLabelSize / 2));
-        ctx.fillText(label, axisX + (downloadCellSize / 2), bottomAxisY + (axisLabelSize / 2));
-      }
+  const headerTitle = `拼豆图纸生成器 / ${selectedColorSystem}`;
+  const headerMeta = `${N}×${M} · ${colorKeys.length} 色 · ${totalBeadCount} 颗`;
+  const headerFontSize = Math.max(9, Math.min(15, Math.floor(sheetWidth / 72)));
+  ctx.fillStyle = '#4B4741';
+  ctx.font = `700 ${headerFontSize}px sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(headerTitle, pagePadding, pagePadding + headerHeight / 2);
+  const headerTitleWidth = ctx.measureText(headerTitle).width;
 
-      // Y轴（左侧/右侧）逐格数字
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      for (let j = 0; j < M; j++) {
-        const axisY = gridOriginY + (j * downloadCellSize);
-        const label = (j + 1).toString();
+  ctx.font = `500 ${Math.max(8, headerFontSize - 2)}px sans-serif`;
+  const remainingHeaderWidth = sheetWidth - pagePadding * 2 - headerTitleWidth - 20;
+  if (ctx.measureText(headerMeta).width <= remainingHeaderWidth) {
+    ctx.fillStyle = '#777168';
+    ctx.textAlign = 'right';
+    ctx.fillText(headerMeta, sheetWidth - pagePadding, pagePadding + headerHeight / 2);
+  }
 
-        ctx.fillStyle = axisFillColor;
-        ctx.fillRect(leftAxisX, axisY, axisLabelSize, downloadCellSize);
-        ctx.fillRect(rightAxisX, axisY, axisLabelSize, downloadCellSize);
-        ctx.strokeStyle = axisGridLineColor;
-        ctx.strokeRect(leftAxisX + 0.5, axisY + 0.5, axisLabelSize, downloadCellSize);
-        ctx.strokeRect(rightAxisX + 0.5, axisY + 0.5, axisLabelSize, downloadCellSize);
-
-        ctx.fillStyle = axisTextColor;
-        ctx.fillText(label, leftAxisX + (axisLabelSize / 2), axisY + (downloadCellSize / 2));
-        ctx.fillText(label, rightAxisX + (axisLabelSize / 2), axisY + (downloadCellSize / 2));
-      }
-    }
-    
-    // 恢复默认文本对齐和基线，为后续绘制做准备
+  if (showCoordinates) {
+    const axisFontSize = Math.max(6, Math.min(10, Math.floor(cellSize * 0.34)));
+    ctx.fillStyle = '#5F5B54';
+    ctx.font = `500 ${axisFontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    // 设置用于绘制单元格内容的字体
-    ctx.font = `bold ${fontSize}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    // 绘制所有单元格
-    for (let j = 0; j < M; j++) {
-      for (let i = 0; i < N; i++) {
-        const cellData = downloadPixelData[j][i];
-        // 计算绘制位置，考虑额外边距和标题栏高度
-        const drawX = gridOriginX + i * downloadCellSize;
-        const drawY = gridOriginY + j * downloadCellSize;
-
-        // 根据是否是外部背景确定填充颜色
-        if (cellData && !cellData.isExternal) {
-          // 内部单元格：使用珠子颜色填充并绘制文本
-          const cellColor = cellData.color || '#FFFFFF';
-
-          ctx.fillStyle = cellColor;
-          ctx.fillRect(drawX, drawY, downloadCellSize, downloadCellSize);
-
-          if (showCellNumbers) {
-            const cellKey = getMappedColorDisplayKey(cellData.color || '#FFFFFF', selectedColorSystem, cellData.key);
-            ctx.fillStyle = getContrastColor(cellColor);
-            ctx.fillText(cellKey, drawX + downloadCellSize / 2, drawY + downloadCellSize / 2);
-          }
-        } else {
-          // 外部背景：同样绘制清晰格子，便于按坐标定位，但不显示色号。
-          ctx.fillStyle = backgroundCellColor;
-          ctx.fillRect(drawX, drawY, downloadCellSize, downloadCellSize);
-        }
-
-        // 绘制所有单元格的边框
-        ctx.strokeStyle = baseGridLineColor; // 背景格也保持清晰可见
-        ctx.lineWidth = baseGridLineWidth;
-        ctx.strokeRect(drawX + 0.5, drawY + 0.5, downloadCellSize, downloadCellSize);
-      }
+    for (let col = 0; col < N; col++) {
+      const centerX = originX + col * cellSize + cellSize / 2;
+      const label = String(col + 1);
+      ctx.fillText(label, centerX, pagePadding + headerHeight + coordinateBand / 2);
+      ctx.fillText(label, centerX, gridBottom + coordinateBand / 2);
     }
 
-    // 如果需要，绘制分隔网格线
-    if (showGrid) {
-      ctx.strokeStyle = majorGridLineColor; // 默认参考图纸使用黑色粗分隔线
-      ctx.lineWidth = majorGridLineWidth;
-      
-      // 绘制垂直分隔线 - 在单元格之间而不是边框上
-      for (let i = gridInterval; i < N; i += gridInterval) {
-        const lineX = gridOriginX + i * downloadCellSize;
-        ctx.beginPath();
-        ctx.moveTo(lineX, topAxisY);
-        ctx.lineTo(lineX, bottomAxisY + axisLabelSize);
-        ctx.stroke();
-      }
-      
-      // 绘制水平分隔线 - 在单元格之间而不是边框上
-      for (let j = gridInterval; j < M; j += gridInterval) {
-        const lineY = gridOriginY + j * downloadCellSize;
-        ctx.beginPath();
-        ctx.moveTo(leftAxisX, lineY);
-        ctx.lineTo(rightAxisX + axisLabelSize, lineY);
-        ctx.stroke();
+    for (let row = 0; row < M; row++) {
+      const centerY = originY + row * cellSize + cellSize / 2;
+      const label = String(row + 1);
+      ctx.fillText(label, pagePadding + coordinateBand / 2, centerY);
+      ctx.fillText(label, originX + gridWidth + coordinateBand / 2, centerY);
+    }
+  }
+
+  const cellFontSize = Math.max(5, Math.min(10, Math.floor(cellSize * 0.34)));
+  ctx.font = `500 ${cellFontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  for (let row = 0; row < M; row++) {
+    for (let col = 0; col < N; col++) {
+      const cell = mappedPixelData[row]?.[col];
+      const drawX = originX + col * cellSize;
+      const drawY = originY + row * cellSize;
+      const isEmpty = !cell || cell.isExternal || cell.key === TRANSPARENT_KEY;
+      const cellColor = isEmpty ? emptyCellColor : cell.color || '#FFFFFF';
+
+      ctx.fillStyle = cellColor;
+      ctx.fillRect(drawX, drawY, cellSize, cellSize);
+
+      if (!isEmpty && showCellNumbers) {
+        ctx.fillStyle = getContrastColor(cellColor);
+        ctx.fillText(
+          getMappedColorDisplayKey(cellColor, selectedColorSystem, cell!.key),
+          drawX + cellSize / 2,
+          drawY + cellSize / 2
+        );
       }
     }
+  }
 
-    // 绘制整个网格区域的主边框
-    ctx.strokeStyle = '#111111'; // 黑色边框
-    ctx.lineWidth = majorGridLineWidth;
-    ctx.strokeRect(
-      gridOriginX + 0.5,
-      gridOriginY + 0.5,
-      N * downloadCellSize, 
-      M * downloadCellSize
+  ctx.strokeStyle = minorLineColor;
+  ctx.lineWidth = cellSize <= 14 ? 0.55 : 0.75;
+  ctx.beginPath();
+  for (let col = 1; col < N; col++) {
+    const lineX = originX + col * cellSize;
+    ctx.moveTo(lineX, originY);
+    ctx.lineTo(lineX, gridBottom);
+  }
+  for (let row = 1; row < M; row++) {
+    const lineY = originY + row * cellSize;
+    ctx.moveTo(originX, lineY);
+    ctx.lineTo(originX + gridWidth, lineY);
+  }
+  ctx.stroke();
+
+  if (showGrid) {
+    ctx.strokeStyle = majorLineColor;
+    ctx.lineWidth = cellSize <= 14 ? 1.1 : 1.5;
+    ctx.beginPath();
+    for (let col = Math.max(1, gridInterval); col < N; col += Math.max(1, gridInterval)) {
+      const lineX = originX + col * cellSize;
+      ctx.moveTo(lineX, originY);
+      ctx.lineTo(lineX, gridBottom);
+    }
+    for (let row = Math.max(1, gridInterval); row < M; row += Math.max(1, gridInterval)) {
+      const lineY = originY + row * cellSize;
+      ctx.moveTo(originX, lineY);
+      ctx.lineTo(originX + gridWidth, lineY);
+    }
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = outerLineColor;
+  ctx.lineWidth = cellSize <= 14 ? 1.2 : 1.8;
+  ctx.strokeRect(originX + 0.5, originY + 0.5, gridWidth, gridHeight);
+
+  if (includeStats && colorKeys.length > 0) {
+    const statsTop = gridBottom + coordinateBand + statsGap;
+    const availableWidth = sheetWidth - pagePadding * 2;
+    const itemWidth = availableWidth / statsColumns;
+    const swatchWidth = Math.max(42, Math.min(72, itemWidth - 18));
+    const swatchHeight = Math.max(24, Math.min(36, Math.round(cellSize * 1.25)));
+
+    ctx.strokeStyle = '#DED9CF';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pagePadding, statsTop);
+    ctx.lineTo(sheetWidth - pagePadding, statsTop);
+    ctx.stroke();
+
+    ctx.fillStyle = '#A55B1E';
+    ctx.font = '600 11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('颜色统计', pagePadding, statsTop + 24);
+    ctx.fillStyle = '#7A746B';
+    ctx.font = '500 10px sans-serif';
+    ctx.fillText(`${colorKeys.length} 色 · ${totalBeadCount} 颗`, pagePadding + 58, statsTop + 24);
+
+    colorKeys.forEach((key, index) => {
+      const row = Math.floor(index / statsColumns);
+      const col = index % statsColumns;
+      const itemCenterX = pagePadding + col * itemWidth + itemWidth / 2;
+      const swatchX = itemCenterX - swatchWidth / 2;
+      const swatchY = statsTop + 42 + row * 68;
+      const item = colorCounts[key];
+      const color = item.color || key;
+      const label = item.displayKey ?? getColorKeyByHex(key, selectedColorSystem);
+
+      ctx.fillStyle = color;
+      ctx.fillRect(swatchX, swatchY, swatchWidth, swatchHeight);
+      ctx.strokeStyle = '#B9B4AB';
+      ctx.lineWidth = 0.75;
+      ctx.strokeRect(swatchX + 0.5, swatchY + 0.5, swatchWidth - 1, swatchHeight - 1);
+      ctx.fillStyle = getContrastColor(color);
+      ctx.font = '600 9px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, itemCenterX, swatchY + swatchHeight / 2);
+      ctx.fillStyle = '#6F6A62';
+      ctx.font = '500 9px sans-serif';
+      ctx.fillText(`${item.count} 颗`, itemCenterX, swatchY + swatchHeight + 12);
+    });
+
+    ctx.fillStyle = '#8A847B';
+    ctx.font = '500 9px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(
+      `${selectedColorSystem} · ${N}×${M} · ${colorKeys.length} 色 · ${totalBeadCount} 颗`,
+      sheetWidth - pagePadding,
+      sheetHeight - 12
     );
+  }
 
-    // 绘制统计信息
-    if (includeStats && colorCounts) {
-      const colorKeys = Object.keys(colorCounts).sort(sortColorKeys);
-      
-      // 增加额外的间距，防止标题文字侵入画布
-      const statsTopMargin = 24; // 增加间距，防止文字侵入画布
-      const statsY = bottomAxisY + axisLabelSize + statsPadding + statsTopMargin;
-      
-      // 计算统计区域的可用宽度
-      const availableStatsWidth = downloadWidth - (statsPadding * 2);
-      
-      // 根据可用宽度动态计算列数 - 这里使用实际渲染时的宽度
-      const renderNumColumns = Math.max(1, Math.min(4, Math.floor(availableStatsWidth / 250)));
-      
-      // 根据可用宽度动态计算样式参数，使用更积极的线性缩放
-      const baseSwatchSize = 18; // 略微增大基础大小
-      // baseStatsFontSize 和 statsFontSize 在前面已经计算了，这里不需要重复
-      // const baseItemPadding = 10;
-      
-      // 调整缩放公式，使大宽度更明显增大
-      // widthFactor 在前面已经计算了，这里不需要重复
-      const swatchSize = Math.floor(baseSwatchSize + (widthFactor * 20)); // 增大最大增量幅度
-      // statsFontSize 在前面已经计算了，这里不需要重复
-      // const itemPadding = Math.floor(baseItemPadding + (widthFactor * 12)); // 增大最大增量幅度 // 移除未使用的 itemPadding
-      
-      // 计算每个项目所占的宽度
-      const itemWidth = Math.floor(availableStatsWidth / renderNumColumns);
-      
-      // 绘制统计区域标题
-      ctx.fillStyle = '#333333';
-      ctx.font = `bold ${Math.max(16, statsFontSize)}px sans-serif`;
-      ctx.textAlign = 'left';
-      
-      // 绘制分隔线
-      ctx.strokeStyle = '#DDDDDD';
-      ctx.beginPath();
-      ctx.moveTo(statsPadding, statsY + 20);
-      ctx.lineTo(downloadWidth - statsPadding, statsY + 20);
-      ctx.stroke();
-      
-      const titleHeight = 30; // 标题和分隔线的总高度
-      // 根据色块大小动态调整行高
-      const statsRowHeight = Math.max(swatchSize + 8, 25); // 确保行高足够放下色块和文字
-      
-      // 设置表格字体
-      ctx.font = `${statsFontSize}px sans-serif`;
-      
-      // 绘制每行统计信息
-      colorKeys.forEach((key, index) => {
-        // 计算当前项目应该在哪一行和哪一列
-        const rowIndex = Math.floor(index / renderNumColumns);
-        const colIndex = index % renderNumColumns;
-        
-        // 计算当前项目的X起始位置
-        const itemX = statsPadding + (colIndex * itemWidth);
-        
-        // 计算当前行的Y位置
-        const rowY = statsY + titleHeight + (rowIndex * statsRowHeight) + (swatchSize / 2);
-        
-        const cellData = colorCounts[key];
-        
-        // 绘制色块
-        ctx.fillStyle = cellData.color;
-        ctx.strokeStyle = '#CCCCCC';
-        ctx.fillRect(itemX, rowY - (swatchSize / 2), swatchSize, swatchSize);
-        ctx.strokeRect(itemX + 0.5, rowY - (swatchSize / 2) + 0.5, swatchSize - 1, swatchSize - 1);
-        
-        // 绘制色号
-        ctx.fillStyle = '#333333';
-        ctx.textAlign = 'left';
-        ctx.fillText(cellData.displayKey ?? getColorKeyByHex(key, selectedColorSystem), itemX + swatchSize + 5, rowY);
-        
-        // 绘制数量 - 在每个项目的右侧
-        const countText = `${cellData.count} 颗`;
-        ctx.textAlign = 'right';
-        
-        // 根据列数计算数字的位置
-        // 如果只有一列，就靠右绘制
-        if (renderNumColumns === 1) {
-          ctx.fillText(countText, downloadWidth - statsPadding, rowY);
-        } else {
-          // 多列时，在每个单元格右侧偏内绘制
-          ctx.fillText(countText, itemX + itemWidth - 10, rowY);
-        }
-      });
-      
-      // 计算实际需要的行数
-      const numRows = Math.ceil(colorKeys.length / renderNumColumns);
-      
-      // 绘制总量
-      const totalY = statsY + titleHeight + (numRows * statsRowHeight) + 10;
-      ctx.font = `bold ${statsFontSize}px sans-serif`;
-      ctx.textAlign = 'right';
-      ctx.fillText(`总计: ${totalBeadCount} 颗`, downloadWidth - statsPadding, totalY);
-      
-      // 更新统计区域高度的计算 - 需要包含新增的顶部间距
-      const footerHeight = 30; // 总计部分高度
-      statsHeight = titleHeight + (numRows * statsRowHeight) + footerHeight + (statsPadding * 2) + statsTopMargin;
-    }
-
-    // 重新计算画布高度并调整
-    if (includeStats && colorCounts) {
-      // 调整画布大小，包含计算后的统计区域
-      const newDownloadHeight = titleBarHeight + extraTopMargin + M * downloadCellSize + (axisLabelSize * 2) + statsHeight + extraBottomMargin;
-      
-      if (downloadHeight !== newDownloadHeight) {
-        // 如果高度变化了，需要创建新的画布并复制当前内容
-        const newCanvas = document.createElement('canvas');
-        newCanvas.width = downloadWidth;
-        newCanvas.height = newDownloadHeight;
-        const newContext = newCanvas.getContext('2d');
-        
-        if (newContext) {
-          // 先填充背景，避免扩展出的画布区域在部分查看器中显示为透明。
-          newContext.fillStyle = '#FFFFFF';
-          newContext.fillRect(0, 0, newCanvas.width, newCanvas.height);
-          // 复制原画布内容
-          newContext.drawImage(downloadCanvas, 0, 0);
-          
-          // 更新画布和上下文引用
-          downloadCanvas = newCanvas;
-          ctx = newContext;
-          ctx.imageSmoothingEnabled = false;
-          
-          // 更新高度
-          downloadHeight = newDownloadHeight;
-        }
-      }
-    }
-
-    try {
-      const blob = await canvasToPngBlob(downloadCanvas);
-      const dataURL = downloadCanvas.toDataURL('image/png');
-      const filename = showCellNumbers
-        ? `bead-grid-${N}x${M}-keys-palette_${selectedColorSystem}.png`
-        : `bead-grid-${N}x${M}-pixel-palette_${selectedColorSystem}.png`;
-      return { imageUrl: dataURL, dataURL, blob, filename };
-    } catch (e) {
-      console.error("生成图纸失败:", e);
-      alert("无法生成图纸。");
-      return null;
-    }
-  };
-  return processDownload();
+  try {
+    const blob = await canvasToPngBlob(canvas);
+    const dataURL = canvas.toDataURL('image/png');
+    const filename = showCellNumbers
+      ? `bead-grid-${N}x${M}-keys-palette_${selectedColorSystem}.png`
+      : `bead-grid-${N}x${M}-pixel-palette_${selectedColorSystem}.png`;
+    return { imageUrl: dataURL, dataURL, blob, filename };
+  } catch (error) {
+    console.error('生成图纸失败:', error);
+    alert('无法生成图纸。');
+    return null;
+  }
 }
 
 // 下载图片的主函数

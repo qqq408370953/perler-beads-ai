@@ -42,6 +42,7 @@ interface PixelatedPreviewCanvasProps {
   colorCounts?: { [key: string]: { count: number; color: string; displayKey?: string } } | null;
   totalBeadCount?: number;
   selectedColorSystem?: ColorSystem;
+  showReferenceGrid?: boolean;
 }
 
 interface GridMetrics {
@@ -56,6 +57,8 @@ interface GridMetrics {
 interface PatternCanvasLayout extends GridMetrics {
   width: number;
   height: number;
+  headerHeight: number;
+  headerY: number;
   axisLabelSize: number;
   topAxisY: number;
   bottomAxisY: number;
@@ -178,8 +181,11 @@ const sortColorKeys = (a: string, b: string): number => {
 
 const getPatternCellSize = (N: number, M: number): number => {
   const largestSide = Math.max(N, M);
-  if (largestSide <= 0) return 30;
-  return Math.max(8, Math.min(30, Math.floor(7200 / largestSide)));
+  if (largestSide <= 0) return 28;
+  if (largestSide <= 64) return 28;
+  if (largestSide <= 110) return 20;
+  if (largestSide <= 180) return 14;
+  return 10;
 };
 
 const getPatternCanvasLayout = (
@@ -191,29 +197,30 @@ const getPatternCanvasLayout = (
   const showCoordinates = options?.showCoordinates ?? true;
   const includeStats = options?.includeStats ?? true;
   const cellSize = getPatternCellSize(N, M);
-  const axisLabelSize = showCoordinates ? Math.max(cellSize, Math.ceil(cellSize * 1.35), 14) : 0;
+  const axisLabelSize = showCoordinates ? Math.max(14, Math.ceil(cellSize * 0.72)) : 0;
+  const headerHeight = Math.max(34, Math.min(46, Math.round(cellSize * 1.7)));
   const statsPadding = 20;
   const gridWidth = N * cellSize;
   const gridHeight = M * cellSize;
   const preCalcWidth = gridWidth + axisLabelSize * 2;
   const availableWidth = preCalcWidth - statsPadding * 2;
-  const statsFontSize = Math.floor(13 + (Math.max(0, availableWidth - 350) / 600) * 10);
-  const extraLeftMargin = showCoordinates ? Math.max(10, statsFontSize) : 0;
-  const extraRightMargin = showCoordinates ? Math.max(10, statsFontSize) : 0;
-  const extraTopMargin = showCoordinates ? Math.max(8, Math.floor(statsFontSize * 0.8)) : 0;
-  const extraBottomMargin = showCoordinates ? Math.max(8, Math.floor(statsFontSize * 0.8)) : 0;
+  const extraLeftMargin = showCoordinates ? 8 : 0;
+  const extraRightMargin = showCoordinates ? 8 : 0;
+  const extraTopMargin = showCoordinates ? 8 : 0;
+  const extraBottomMargin = showCoordinates ? 8 : 0;
   let statsHeight = 0;
 
   if (includeStats && colorCounts && Object.keys(colorCounts).length > 0) {
-    const numColumns = Math.max(1, Math.min(8, Math.floor(availableWidth / 120)));
+    const numColumns = Math.max(1, Math.min(10, Math.floor(availableWidth / 120)));
     const numRows = Math.ceil(Object.keys(colorCounts).length / numColumns);
-    statsHeight = 24 + Math.max(44, numRows * 44) + 58;
+    statsHeight = 54 + numRows * 68 + 34;
   }
 
   const width = gridWidth + axisLabelSize * 2 + extraLeftMargin + extraRightMargin;
   const originX = extraLeftMargin + axisLabelSize;
-  const topAxisY = extraTopMargin;
-  const originY = extraTopMargin + axisLabelSize;
+  const headerY = extraTopMargin;
+  const topAxisY = headerY + headerHeight;
+  const originY = topAxisY + axisLabelSize;
   const bottomAxisY = originY + gridHeight;
   const leftAxisX = extraLeftMargin;
   const rightAxisX = originX + gridWidth;
@@ -228,6 +235,8 @@ const getPatternCanvasLayout = (
     cellHeight: cellSize,
     gridWidth,
     gridHeight,
+    headerHeight,
+    headerY,
     axisLabelSize,
     topAxisY,
     bottomAxisY,
@@ -348,7 +357,9 @@ const drawPixelatedCanvas = (
   selectedCells: RegionSelectionCell[] = [],
   previewCells: RegionSelectionCell[] = [],
   selectionPath: CanvasPoint[] = [],
-  rectangleBounds?: { start: CanvasPoint; current: CanvasPoint } | null
+  rectangleBounds?: { start: CanvasPoint; current: CanvasPoint } | null,
+  selectedColorSystem: ColorSystem = '通用221色',
+  showReferenceGrid = true
 ) => {
   if (!canvas || !dims || !dataToDraw) {
     console.warn("drawPixelatedCanvas: Missing required parameters");
@@ -361,48 +372,59 @@ const drawPixelatedCanvas = (
     return;
   }
 
-  // Respect current dark mode preference
-  const isDarkMode = typeof window !== 'undefined' && document.documentElement.classList.contains('dark');
-
-  // Define colors based on mode
-  const externalBackgroundColor = isDarkMode ? '#374151' : '#F3F4F6'; // gray-700 : gray-100
-  const gridLineColor = isDarkMode ? '#4B5563' : '#DDDDDD'; // gray-600 : lighter gray
-
   const { N, M } = dims;
   const outputWidth = canvas.width;
   const outputHeight = canvas.height;
   const cellWidthOutput = outputWidth / N;
   const cellHeightOutput = outputHeight / M;
+  const minimumCellSize = Math.min(cellWidthOutput, cellHeightOutput);
+  const showCellLabels = minimumCellSize >= 13;
+  const paperColor = '#FFFEFA';
+  const minorGridLineColor = 'rgba(145, 154, 153, 0.42)';
+  const majorGridLineColor = 'rgba(199, 126, 73, 0.72)';
 
+  pixelatedCtx.imageSmoothingEnabled = false;
   pixelatedCtx.clearRect(0, 0, outputWidth, outputHeight);
-  pixelatedCtx.lineWidth = 0.5; // Keep line width thin
+  pixelatedCtx.fillStyle = paperColor;
+  pixelatedCtx.fillRect(0, 0, outputWidth, outputHeight);
+
+  if (showCellLabels) {
+    const fontSize = Math.max(5, Math.min(8, Math.floor(minimumCellSize * 0.4)));
+    pixelatedCtx.font = `600 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
+    pixelatedCtx.textAlign = 'center';
+    pixelatedCtx.textBaseline = 'middle';
+  }
 
   for (let j = 0; j < M; j++) {
     for (let i = 0; i < N; i++) {
       const cellData = dataToDraw[j]?.[i];
-      if (!cellData) continue;
 
       const drawX = i * cellWidthOutput;
       const drawY = j * cellHeightOutput;
 
-      // Fill cell color using mode-specific background for external cells
-      if (cellData.isExternal) {
-        pixelatedCtx.fillStyle = externalBackgroundColor;
-      } else {
-        pixelatedCtx.fillStyle = cellData.color;
-      }
+      const isTransparent = !cellData || cellData.isExternal || cellData.key === TRANSPARENT_KEY;
+      pixelatedCtx.fillStyle = isTransparent ? paperColor : cellData.color;
       pixelatedCtx.fillRect(drawX, drawY, cellWidthOutput, cellHeightOutput);
+
+      if (showCellLabels && cellData && !isTransparent) {
+        pixelatedCtx.fillStyle = getContrastColor(cellData.color);
+        pixelatedCtx.fillText(
+          getMappedColorDisplayKey(cellData.color, selectedColorSystem, cellData.key),
+          drawX + cellWidthOutput / 2,
+          drawY + cellHeightOutput / 2
+        );
+      }
 
       // 如果正在高亮且当前单元格不是目标颜色，添加半透明黑色蒙版
       if (isHighlighting && highlightColorKey) {
         let shouldDim = false;
         
-        if (cellData.isExternal) {
+        if (isTransparent) {
           // 外部单元格总是变深色（因为它们不是要高亮的颜色）
           shouldDim = true;
         } else {
           // 内部单元格：如果颜色不匹配则变深色
-          shouldDim = cellData.color.toUpperCase() !== highlightColorKey.toUpperCase();
+          shouldDim = cellData!.color.toUpperCase() !== highlightColorKey.toUpperCase();
         }
         
         if (shouldDim) {
@@ -411,11 +433,46 @@ const drawPixelatedCanvas = (
         }
       }
 
-      // Draw grid lines using mode-specific color
-      pixelatedCtx.strokeStyle = gridLineColor;
-      pixelatedCtx.strokeRect(drawX + 0.5, drawY + 0.5, cellWidthOutput, cellHeightOutput);
     }
   }
+
+  if (showReferenceGrid) {
+    pixelatedCtx.save();
+    pixelatedCtx.strokeStyle = minorGridLineColor;
+    pixelatedCtx.lineWidth = minimumCellSize <= 5 ? 0.45 : 0.65;
+    pixelatedCtx.beginPath();
+    for (let col = 1; col < N; col++) {
+      const lineX = col * cellWidthOutput;
+      pixelatedCtx.moveTo(lineX, 0);
+      pixelatedCtx.lineTo(lineX, outputHeight);
+    }
+    for (let row = 1; row < M; row++) {
+      const lineY = row * cellHeightOutput;
+      pixelatedCtx.moveTo(0, lineY);
+      pixelatedCtx.lineTo(outputWidth, lineY);
+    }
+    pixelatedCtx.stroke();
+
+    pixelatedCtx.strokeStyle = majorGridLineColor;
+    pixelatedCtx.lineWidth = minimumCellSize <= 5 ? 1 : 1.35;
+    pixelatedCtx.beginPath();
+    for (let col = 10; col < N; col += 10) {
+      const lineX = col * cellWidthOutput;
+      pixelatedCtx.moveTo(lineX, 0);
+      pixelatedCtx.lineTo(lineX, outputHeight);
+    }
+    for (let row = 10; row < M; row += 10) {
+      const lineY = row * cellHeightOutput;
+      pixelatedCtx.moveTo(0, lineY);
+      pixelatedCtx.lineTo(outputWidth, lineY);
+    }
+    pixelatedCtx.stroke();
+    pixelatedCtx.restore();
+  }
+
+  pixelatedCtx.strokeStyle = '#B8B7B0';
+  pixelatedCtx.lineWidth = 1;
+  pixelatedCtx.strokeRect(0.5, 0.5, outputWidth - 1, outputHeight - 1);
 
   const selectedCellKeys = new Set([
     ...selectedCells.map(cell => `${cell.row}:${cell.col}`),
@@ -491,52 +548,49 @@ const drawPatternCanvas = (
   const showCoordinates = options?.showCoordinates ?? true;
   const showCellNumbers = options?.showCellNumbers ?? true;
   const includeStats = options?.includeStats ?? true;
-  const majorGridLineColor = options?.gridLineColor === '#555555'
-    ? '#111111'
-    : options?.gridLineColor ?? '#111111';
+  const majorGridLineColor = options?.gridLineColor ?? '#4F4D48';
   const cellSize = layout.cellWidth;
-  const axisFillColor = '#A9473F';
-  const axisGridLineColor = '#6F2A26';
-  const axisTextColor = '#F8FAFC';
-  const baseGridLineColor = '#8A8A8A';
-  const backgroundCellColor = '#FAFAFA';
-  const baseGridLineWidth = cellSize <= 10 ? 0.9 : 1;
-  const majorGridLineWidth = cellSize <= 10 ? 2 : 2.4;
+  const axisTextColor = '#5F5B54';
+  const baseGridLineColor = '#8D8980';
+  const backgroundCellColor = '#FFFCEE';
+  const sheetColor = '#FFFEF8';
+  const baseGridLineWidth = cellSize <= 14 ? 0.55 : 0.75;
+  const majorGridLineWidth = cellSize <= 14 ? 1.1 : 1.5;
 
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#FFFFFF';
+  ctx.fillStyle = sheetColor;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  const headerTitle = `拼豆图纸生成器 / ${selectedColorSystem}`;
+  const headerMeta = `${N}×${M} · ${colorCounts ? Object.keys(colorCounts).length : 0} 色 · ${totalBeadCount ?? 0} 颗`;
+  const headerPadding = 12;
+  const headerFontSize = Math.max(9, Math.min(15, Math.floor(layout.width / 72)));
+  ctx.fillStyle = '#4B4741';
+  ctx.font = `700 ${headerFontSize}px sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(headerTitle, headerPadding, layout.headerY + layout.headerHeight / 2);
+  const headerTitleWidth = ctx.measureText(headerTitle).width;
+
+  ctx.font = `500 ${Math.max(8, headerFontSize - 2)}px sans-serif`;
+  const remainingHeaderWidth = layout.width - headerPadding * 2 - headerTitleWidth - 20;
+  if (ctx.measureText(headerMeta).width <= remainingHeaderWidth) {
+    ctx.fillStyle = '#777168';
+    ctx.textAlign = 'right';
+    ctx.fillText(headerMeta, layout.width - headerPadding, layout.headerY + layout.headerHeight / 2);
+  }
+
   if (showCoordinates) {
-    const axisFontSize = Math.max(4, Math.min(10, Math.floor(cellSize * 0.52)));
-    ctx.font = `bold ${axisFontSize}px sans-serif`;
+    const axisFontSize = Math.max(6, Math.min(10, Math.floor(cellSize * 0.34)));
+    ctx.font = `500 ${axisFontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-
-    ctx.fillStyle = axisFillColor;
-    ctx.fillRect(layout.leftAxisX, layout.topAxisY, layout.axisLabelSize, layout.axisLabelSize);
-    ctx.fillRect(layout.rightAxisX, layout.topAxisY, layout.axisLabelSize, layout.axisLabelSize);
-    ctx.fillRect(layout.leftAxisX, layout.bottomAxisY, layout.axisLabelSize, layout.axisLabelSize);
-    ctx.fillRect(layout.rightAxisX, layout.bottomAxisY, layout.axisLabelSize, layout.axisLabelSize);
-
-    ctx.strokeStyle = axisGridLineColor;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(layout.leftAxisX + 0.5, layout.topAxisY + 0.5, layout.axisLabelSize, layout.axisLabelSize);
-    ctx.strokeRect(layout.rightAxisX + 0.5, layout.topAxisY + 0.5, layout.axisLabelSize, layout.axisLabelSize);
-    ctx.strokeRect(layout.leftAxisX + 0.5, layout.bottomAxisY + 0.5, layout.axisLabelSize, layout.axisLabelSize);
-    ctx.strokeRect(layout.rightAxisX + 0.5, layout.bottomAxisY + 0.5, layout.axisLabelSize, layout.axisLabelSize);
 
     for (let col = 0; col < N; col++) {
       const axisX = layout.originX + col * cellSize;
       const label = String(col + 1);
 
-      ctx.fillStyle = axisFillColor;
-      ctx.fillRect(axisX, layout.topAxisY, cellSize, layout.axisLabelSize);
-      ctx.fillRect(axisX, layout.bottomAxisY, cellSize, layout.axisLabelSize);
-      ctx.strokeStyle = axisGridLineColor;
-      ctx.strokeRect(axisX + 0.5, layout.topAxisY + 0.5, cellSize, layout.axisLabelSize);
-      ctx.strokeRect(axisX + 0.5, layout.bottomAxisY + 0.5, cellSize, layout.axisLabelSize);
       ctx.fillStyle = axisTextColor;
       ctx.fillText(label, axisX + cellSize / 2, layout.topAxisY + layout.axisLabelSize / 2);
       ctx.fillText(label, axisX + cellSize / 2, layout.bottomAxisY + layout.axisLabelSize / 2);
@@ -546,20 +600,14 @@ const drawPatternCanvas = (
       const axisY = layout.originY + row * cellSize;
       const label = String(row + 1);
 
-      ctx.fillStyle = axisFillColor;
-      ctx.fillRect(layout.leftAxisX, axisY, layout.axisLabelSize, cellSize);
-      ctx.fillRect(layout.rightAxisX, axisY, layout.axisLabelSize, cellSize);
-      ctx.strokeStyle = axisGridLineColor;
-      ctx.strokeRect(layout.leftAxisX + 0.5, axisY + 0.5, layout.axisLabelSize, cellSize);
-      ctx.strokeRect(layout.rightAxisX + 0.5, axisY + 0.5, layout.axisLabelSize, cellSize);
       ctx.fillStyle = axisTextColor;
       ctx.fillText(label, layout.leftAxisX + layout.axisLabelSize / 2, axisY + cellSize / 2);
       ctx.fillText(label, layout.rightAxisX + layout.axisLabelSize / 2, axisY + cellSize / 2);
     }
   }
 
-  const fontSize = Math.max(8, Math.floor(cellSize * 0.4));
-  ctx.font = `bold ${fontSize}px sans-serif`;
+  const fontSize = Math.max(5, Math.min(10, Math.floor(cellSize * 0.34)));
+  ctx.font = `500 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
@@ -586,12 +634,23 @@ const drawPatternCanvas = (
         ctx.fillStyle = backgroundCellColor;
         ctx.fillRect(drawX, drawY, cellSize, cellSize);
       }
-
-      ctx.strokeStyle = baseGridLineColor;
-      ctx.lineWidth = baseGridLineWidth;
-      ctx.strokeRect(drawX + 0.5, drawY + 0.5, cellSize, cellSize);
     }
   }
+
+  ctx.strokeStyle = baseGridLineColor;
+  ctx.lineWidth = baseGridLineWidth;
+  ctx.beginPath();
+  for (let col = 1; col < N; col++) {
+    const lineX = layout.originX + col * cellSize;
+    ctx.moveTo(lineX, layout.originY);
+    ctx.lineTo(lineX, layout.originY + layout.gridHeight);
+  }
+  for (let row = 1; row < M; row++) {
+    const lineY = layout.originY + row * cellSize;
+    ctx.moveTo(layout.originX, lineY);
+    ctx.lineTo(layout.originX + layout.gridWidth, lineY);
+  }
+  ctx.stroke();
 
   if (showGrid) {
     ctx.strokeStyle = majorGridLineColor;
@@ -600,21 +659,21 @@ const drawPatternCanvas = (
     for (let col = gridInterval; col < N; col += gridInterval) {
       const lineX = layout.originX + col * cellSize;
       ctx.beginPath();
-      ctx.moveTo(lineX, layout.topAxisY);
-      ctx.lineTo(lineX, layout.bottomAxisY + layout.axisLabelSize);
+      ctx.moveTo(lineX, layout.originY);
+      ctx.lineTo(lineX, layout.originY + layout.gridHeight);
       ctx.stroke();
     }
 
     for (let row = gridInterval; row < M; row += gridInterval) {
       const lineY = layout.originY + row * cellSize;
       ctx.beginPath();
-      ctx.moveTo(layout.leftAxisX, lineY);
-      ctx.lineTo(layout.rightAxisX + layout.axisLabelSize, lineY);
+      ctx.moveTo(layout.originX, lineY);
+      ctx.lineTo(layout.originX + layout.gridWidth, lineY);
       ctx.stroke();
     }
   }
 
-  ctx.strokeStyle = '#111111';
+  ctx.strokeStyle = '#55524C';
   ctx.lineWidth = majorGridLineWidth;
   ctx.strokeRect(
     layout.originX + 0.5,
@@ -673,47 +732,65 @@ const drawPatternCanvas = (
 
   if (includeStats && colorCounts && Object.keys(colorCounts).length > 0) {
     const colorKeys = Object.keys(colorCounts).sort(sortColorKeys);
-    const columns = Math.max(1, Math.min(8, Math.floor((layout.width - 40) / 120)));
-    const itemWidth = Math.floor((layout.width - 40) / columns);
-    const swatchSize = 28;
-    const labelFontSize = 16;
-    const countFontSize = 13;
+    const padding = 20;
+    const availableWidth = layout.width - padding * 2;
+    const columns = Math.max(1, Math.min(10, Math.floor(availableWidth / 120)));
+    const itemWidth = availableWidth / columns;
+    const swatchWidth = Math.max(42, Math.min(72, itemWidth - 18));
+    const swatchHeight = Math.max(24, Math.min(36, Math.round(cellSize * 1.25)));
+
+    ctx.strokeStyle = '#DED9CF';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padding, layout.statsY);
+    ctx.lineTo(layout.width - padding, layout.statsY);
+    ctx.stroke();
+
+    ctx.fillStyle = '#A55B1E';
+    ctx.font = '600 11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('颜色统计', padding, layout.statsY + 24);
+    ctx.fillStyle = '#7A746B';
+    ctx.font = '500 10px sans-serif';
+    ctx.fillText(`${colorKeys.length} 色 · ${totalBeadCount ?? 0} 颗`, padding + 58, layout.statsY + 24);
 
     colorKeys.forEach((key, index) => {
       const row = Math.floor(index / columns);
       const col = index % columns;
-      const x = 20 + col * itemWidth;
-      const y = layout.statsY + row * 44;
+      const centerX = padding + col * itemWidth + itemWidth / 2;
+      const x = centerX - swatchWidth / 2;
+      const y = layout.statsY + 42 + row * 68;
       const item = colorCounts[key];
       const color = item.color || key;
       const label = item.displayKey ?? getDisplayColorKey(color, selectedColorSystem);
 
       ctx.fillStyle = color;
-      ctx.fillRect(x, y, swatchSize, swatchSize);
-      ctx.strokeStyle = '#CCCCCC';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, swatchSize, swatchSize);
+      ctx.fillRect(x, y, swatchWidth, swatchHeight);
+      ctx.strokeStyle = '#B9B4AB';
+      ctx.lineWidth = 0.75;
+      ctx.strokeRect(x + 0.5, y + 0.5, swatchWidth - 1, swatchHeight - 1);
 
       ctx.fillStyle = getContrastColor(color);
-      ctx.font = `bold ${Math.max(8, Math.floor(labelFontSize * 0.58))}px sans-serif`;
+      ctx.font = '600 9px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(label, x + swatchSize / 2, y + swatchSize / 2);
+      ctx.fillText(label, centerX, y + swatchHeight / 2);
 
-      ctx.fillStyle = '#111111';
-      ctx.font = `bold ${labelFontSize}px sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.fillText(label, x + swatchSize + 8, y + swatchSize / 2);
-      ctx.font = `${countFontSize}px sans-serif`;
-      ctx.fillStyle = '#555555';
-      ctx.fillText(String(item.count), x + swatchSize + 8, y + swatchSize + 16);
+      ctx.fillStyle = '#6F6A62';
+      ctx.font = '500 9px sans-serif';
+      ctx.fillText(`${item.count} 颗`, centerX, y + swatchHeight + 12);
     });
 
-    ctx.fillStyle = '#111111';
-    ctx.font = 'bold 18px sans-serif';
-    ctx.textAlign = 'left';
+    ctx.fillStyle = '#8A847B';
+    ctx.font = '500 9px sans-serif';
+    ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
-    ctx.fillText(`所需豆子数量：${totalBeadCount ?? 0}`, 20, layout.height - 28);
+    ctx.fillText(
+      `${selectedColorSystem} · ${N}×${M} · ${colorKeys.length} 色 · ${totalBeadCount ?? 0} 颗`,
+      layout.width - padding,
+      layout.height - 12
+    );
   }
 };
 
@@ -734,6 +811,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
   colorCounts,
   totalBeadCount,
   selectedColorSystem = 'MARD',
+  showReferenceGrid = true,
 }) => {
   const [darkModeState, setDarkModeState] = useState<boolean | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number; pageX: number; pageY: number } | null>(null);
@@ -852,7 +930,9 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
           selectionMode === 'lasso' && isSelectingRegion ? lassoPoints : [],
           selectionMode === 'rectangle' && isSelectingRegion && selectionStart && selectionCurrent
             ? { start: selectionStart, current: selectionCurrent }
-            : null
+            : null,
+          selectedColorSystem,
+          showReferenceGrid
         );
       }
     }
@@ -865,6 +945,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
     colorCounts,
     totalBeadCount,
     selectedColorSystem,
+    showReferenceGrid,
     darkModeState,
     highlightColorKey,
     isHighlighting,
@@ -1129,7 +1210,7 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd} // 添加 onTouchCancel 以处理触摸中断的情况
-      className={`border border-gray-300 dark:border-gray-600 max-w-full h-auto rounded block ${
+      className={`block h-auto max-w-full bg-[#fffefa] shadow-[0_3px_16px_rgba(77,64,45,0.13)] ${
         isRegionSelectionActive ? 'cursor-crosshair' : isManualColoringMode ? 'cursor-pointer' : 'cursor-grab' // 改为 grab 光标提示可以拖动
       }`}
       style={{

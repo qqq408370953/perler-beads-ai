@@ -39,6 +39,10 @@ yarn-error.log*
 # cloudflare
 .open-next/
 .dev.vars
+/.wrangler/
+
+# local package cache
+/.npm-cache/
 
 # typescript
 *.tsbuildinfo

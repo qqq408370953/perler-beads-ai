@@ -8,8 +8,8 @@ export type ColorSystem = '通用221色' | BaseColorSystem;
 
 // 色号系统选项
 export const colorSystemOptions = [
+  { key: 'MARD', name: 'MARD 全色' },
   { key: '通用221色', name: '通用221色' },
-  { key: 'MARD', name: 'MARD' },
   { key: 'COCO', name: 'COCO' },
   { key: '漫漫', name: '漫漫' },
   { key: '盼盼', name: '盼盼' },

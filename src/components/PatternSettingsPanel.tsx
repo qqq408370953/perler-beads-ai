@@ -1,0 +1,232 @@
+'use client';
+
+import type { CSSProperties } from 'react';
+import type { ColorSystem } from '../utils/colorSystemUtils';
+
+export type PatternPresetId = 'economy' | 'balanced' | 'portrait' | 'detailed' | 'large';
+
+export type PatternPreset = {
+  id: PatternPresetId;
+  label: string;
+  granularity: number;
+  maxColorCount: number;
+  similarityThreshold: number;
+};
+
+type ProcessingOption = 'horizontalMirror' | 'verticalMirror' | 'removeBackground' | 'outline';
+
+type PatternSettingsPanelProps = {
+  presets: readonly PatternPreset[];
+  selectedPreset: PatternPresetId | null;
+  onPresetChange: (preset: PatternPreset) => void;
+  processing: Record<ProcessingOption, boolean>;
+  onProcessingToggle: (option: ProcessingOption) => void;
+  colorSystems: readonly { key: string; name: string }[];
+  selectedColorSystem: ColorSystem;
+  onColorSystemChange: (colorSystem: ColorSystem) => void;
+  onManagePalette: () => void;
+  selectedPaletteColorCount: number;
+  isCustomPalette: boolean;
+  granularity: number;
+  gridDimensions: { N: number; M: number } | null;
+  onGranularityChange: (value: number) => void;
+  maxColorCount: number;
+  paletteColorCount: number;
+  onMaxColorCountChange: (value: number) => void;
+  brightness: number;
+  onBrightnessChange: (value: number) => void;
+};
+
+const processingOptions: readonly { key: ProcessingOption; label: string }[] = [
+  { key: 'horizontalMirror', label: '水平镜像' },
+  { key: 'verticalMirror', label: '垂直镜像' },
+  { key: 'removeBackground', label: '去背景' },
+  { key: 'outline', label: '加描边' },
+];
+
+const cardClass = 'rounded-2xl border border-[#e6dfd4] bg-[#fffdf8] p-4 shadow-[0_8px_24px_rgba(83,67,45,0.08)] sm:p-5 dark:border-gray-700 dark:bg-gray-800';
+const activePillClass = 'border-[#f28a2e] bg-gradient-to-b from-[#ffad5c] to-[#f28428] text-white shadow-[0_6px_14px_rgba(242,132,40,0.24)]';
+const idlePillClass = 'border-[#ddd5c9] bg-[#fffefa] text-[#736d64] hover:border-[#f2a25a] hover:text-[#cf6d17] dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200';
+
+function SettingHeader({ title, value }: { title: string; value?: string }) {
+  return (
+    <div className="mb-3 flex items-center justify-between gap-3">
+      <h3 className="text-lg font-black tracking-tight text-[#2d2924] dark:text-gray-100">{title}</h3>
+      {value && <span className="shrink-0 text-base font-black text-[#2d2924] dark:text-gray-100">{value}</span>}
+    </div>
+  );
+}
+
+function RangeCard({
+  title,
+  valueLabel,
+  value,
+  min,
+  max,
+  step = 1,
+  lowLabel,
+  highLabel,
+  accent,
+  onChange,
+}: {
+  title: string;
+  valueLabel: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  lowLabel: string;
+  highLabel: string;
+  accent: string;
+  onChange: (value: number) => void;
+}) {
+  const progress = max === min ? 0 : ((value - min) / (max - min)) * 100;
+
+  return (
+    <section className={cardClass}>
+      <SettingHeader title={title} value={valueLabel} />
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="pattern-settings-range"
+        style={{
+          '--range-accent': accent,
+          '--range-progress': `${progress}%`,
+        } as CSSProperties}
+        aria-label={title}
+      />
+      <div className="mt-1 flex justify-between text-xs font-medium text-[#aaa297] dark:text-gray-400">
+        <span>{lowLabel}</span>
+        <span>{highLabel}</span>
+      </div>
+    </section>
+  );
+}
+
+export default function PatternSettingsPanel({
+  presets,
+  selectedPreset,
+  onPresetChange,
+  processing,
+  onProcessingToggle,
+  colorSystems,
+  selectedColorSystem,
+  onColorSystemChange,
+  onManagePalette,
+  selectedPaletteColorCount,
+  isCustomPalette,
+  granularity,
+  gridDimensions,
+  onGranularityChange,
+  maxColorCount,
+  paletteColorCount,
+  onMaxColorCountChange,
+  brightness,
+  onBrightnessChange,
+}: PatternSettingsPanelProps) {
+  const selectedPresetLabel = presets.find((preset) => preset.id === selectedPreset)?.label ?? '自定义';
+  const selectedSystemLabel = colorSystems.find((system) => system.key === selectedColorSystem)?.name ?? selectedColorSystem;
+  const effectivePaletteCount = Math.max(1, paletteColorCount);
+
+  return (
+    <div className="mt-5 grid w-full gap-4" aria-label="图纸生成设置">
+      <section className={cardClass}>
+        <SettingHeader title="制作预设" value={selectedPresetLabel} />
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+          {presets.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => onPresetChange(preset)}
+              className={`min-h-11 rounded-xl border px-2 py-2 text-sm font-black transition sm:text-base ${selectedPreset === preset.id ? activePillClass : idlePillClass}`}
+              aria-pressed={selectedPreset === preset.id}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className={cardClass}>
+        <SettingHeader title="生成处理" />
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {processingOptions.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => onProcessingToggle(option.key)}
+              className={`min-h-11 rounded-xl border px-2 py-2 text-sm font-black transition sm:text-base ${processing[option.key] ? activePillClass : idlePillClass}`}
+              aria-pressed={processing[option.key]}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className={cardClass}>
+        <SettingHeader title="品牌色号" value={selectedSystemLabel} />
+        <div className="flex flex-wrap gap-2">
+          {colorSystems.map((system) => (
+            <button
+              key={system.key}
+              type="button"
+              onClick={() => onColorSystemChange(system.key as ColorSystem)}
+              className={`min-h-11 rounded-full border px-4 py-2 text-sm font-black transition sm:text-base ${selectedColorSystem === system.key ? activePillClass : idlePillClass}`}
+              aria-pressed={selectedColorSystem === system.key}
+            >
+              {system.name}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={onManagePalette}
+          className="mt-3 min-h-10 rounded-full border border-[#ead7c2] bg-[#fff8ef] px-4 py-2 text-sm font-bold text-[#bd681d] transition hover:bg-[#fff0df] dark:border-gray-600 dark:bg-gray-700 dark:text-orange-300"
+        >
+          管理色板（{selectedPaletteColorCount} 色）{isCustomPalette ? ' · 自定义' : ''}
+        </button>
+      </section>
+
+      <RangeCard
+        title="网格宽度"
+        valueLabel={gridDimensions ? `${gridDimensions.N} × ${gridDimensions.M}` : `${granularity}`}
+        value={granularity}
+        min={24}
+        max={180}
+        lowLabel="大颗粒"
+        highLabel="超细致"
+        accent="#f3c628"
+        onChange={onGranularityChange}
+      />
+
+      <RangeCard
+        title="色彩数量"
+        valueLabel={`${maxColorCount} / ${effectivePaletteCount} 种`}
+        value={Math.min(maxColorCount, effectivePaletteCount)}
+        min={1}
+        max={effectivePaletteCount}
+        lowLabel="简约"
+        highLabel="丰富"
+        accent="#f05b59"
+        onChange={onMaxColorCountChange}
+      />
+
+      <RangeCard
+        title="图纸亮度"
+        valueLabel={`${brightness > 0 ? '+' : ''}${brightness}%`}
+        value={brightness}
+        min={-50}
+        max={50}
+        lowLabel="暗一些"
+        highLabel="亮一些"
+        accent="#25d4cf"
+        onChange={onBrightnessChange}
+      />
+    </div>
+  );
+}
