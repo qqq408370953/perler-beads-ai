@@ -100,7 +100,7 @@ export default function FocusMode() {
 
   // 下载功能相关状态
   const [colorCounts, setColorCounts] = useState<{ [key: string]: { count: number; color: string } } | null>(null);
-  const [selectedColorSystem, setSelectedColorSystem] = useState<ColorSystem>('MARD');
+  const [selectedColorSystem, setSelectedColorSystem] = useState<ColorSystem>('通用221色');
   const [isDownloadSettingsOpen, setIsDownloadSettingsOpen] = useState(false);
   const [downloadOptions, setDownloadOptions] = useState<GridDownloadOptions>({
     showGrid: true,
@@ -155,14 +155,14 @@ export default function FocusMode() {
         setColorCounts(parsedColorCounts);
         
         // 设置色号系统
-        const colorSystem = (savedColorSystem as ColorSystem) || 'MARD';
+        const colorSystem = (savedColorSystem as ColorSystem) || '通用221色';
         setSelectedColorSystem(colorSystem);
 
         // 计算颜色进度
         const colors = Object.entries(parsedColorCounts).map(([, colorData]) => {
           const data = colorData as { color: string; count: number };
           // 通过hex值获取对应色号系统的色号
-          const displayKey = getColorKeyByHex(data.color, savedColorSystem as ColorSystem || 'MARD');
+          const displayKey = getColorKeyByHex(data.color, savedColorSystem as ColorSystem || '通用221色');
           return {
             color: data.color,
             name: displayKey, // 使用色号系统的色号作为名称

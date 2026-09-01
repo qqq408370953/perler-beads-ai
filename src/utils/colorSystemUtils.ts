@@ -1,11 +1,14 @@
 import { PaletteColor } from './pixelation';
 import colorSystemMapping from '../app/colorSystemMapping.json';
 
-// 定义色号系统类型并导出
-export type ColorSystem = 'MARD' | 'COCO' | '漫漫' | '盼盼' | '咪小窝';
+type BaseColorSystem = 'MARD' | 'COCO' | '漫漫' | '盼盼' | '咪小窝';
+
+// “通用221色”使用 MARD 的 A-H、M 标准色号，不包含扩展系列。
+export type ColorSystem = '通用221色' | BaseColorSystem;
 
 // 色号系统选项
 export const colorSystemOptions = [
+  { key: '通用221色', name: '通用221色' },
   { key: 'MARD', name: 'MARD' },
   { key: 'COCO', name: 'COCO' },
   { key: '漫漫', name: '漫漫' },
@@ -14,8 +17,25 @@ export const colorSystemOptions = [
 ];
 
 // 类型定义
-type ColorMapping = Record<string, Record<ColorSystem, string>>;
+type ColorMapping = Record<string, Record<BaseColorSystem, string>>;
 const typedColorSystemMapping = colorSystemMapping as ColorMapping;
+
+function getMappingSystem(colorSystem: ColorSystem): BaseColorSystem {
+  return colorSystem === '通用221色' ? 'MARD' : colorSystem;
+}
+
+function isStandard221MardKey(key?: string): boolean {
+  return /^[A-HM]\d+$/i.test(key ?? '');
+}
+
+export function isColorAvailableInSystem(hexValue: string, colorSystem: ColorSystem): boolean {
+  const mapping = typedColorSystemMapping[hexValue.toUpperCase()];
+  if (!mapping) return false;
+
+  return colorSystem === '通用221色'
+    ? isStandard221MardKey(mapping.MARD)
+    : Boolean(mapping[colorSystem]);
+}
 
 // 获取所有可用的hex值
 export function getAllHexValues(): string[] {
@@ -35,10 +55,10 @@ export function getMardToHexMapping(): Record<string, string> {
 }
 
 // 从colorSystemMapping.json加载完整的颜色映射数据
-export function loadFullColorMapping(): Map<string, Record<ColorSystem, string>> {
-  const mapping = new Map<string, Record<ColorSystem, string>>();
+export function loadFullColorMapping(): Map<string, Record<BaseColorSystem, string>> {
+  const mapping = new Map<string, Record<BaseColorSystem, string>>();
   Object.entries(colorSystemMapping).forEach(([baseKey, colorData]) => {
-    mapping.set(baseKey, colorData as Record<ColorSystem, string>);
+    mapping.set(baseKey, colorData as Record<BaseColorSystem, string>);
   });
   return mapping;
 }
@@ -48,12 +68,13 @@ export function convertPaletteToColorSystem(
   palette: PaletteColor[],
   colorSystem: ColorSystem
 ): PaletteColor[] {
-  return palette.map(color => {
+  const mappingSystem = getMappingSystem(colorSystem);
+  return palette.filter(color => isColorAvailableInSystem(color.hex, colorSystem)).map(color => {
     const colorMapping = typedColorSystemMapping[color.hex];
-    if (colorMapping && colorMapping[colorSystem]) {
+    if (colorMapping && colorMapping[mappingSystem]) {
       return {
         ...color,
-        key: colorMapping[colorSystem]
+        key: colorMapping[mappingSystem]
       };
     }
     return color; // 如果找不到映射，保持原样
@@ -69,11 +90,13 @@ export function getDisplayColorKey(hexValue: string, colorSystem: ColorSystem): 
   
   // 标准化hex值（确保大写）
   const normalizedHex = hexValue.toUpperCase();
+  if (!isColorAvailableInSystem(normalizedHex, colorSystem)) return '?';
   
   // 通过hex值从colorSystemMapping获取目标色号系统的值
   const colorMapping = typedColorSystemMapping[normalizedHex];
-  if (colorMapping && colorMapping[colorSystem]) {
-    return colorMapping[colorSystem];
+  const mappingSystem = getMappingSystem(colorSystem);
+  if (colorMapping && colorMapping[mappingSystem]) {
+    return colorMapping[mappingSystem];
   }
   
   return '?'; // 如果找不到映射，返回 '?'
@@ -87,8 +110,9 @@ export function convertColorKeyToHex(displayKey: string, colorSystem: ColorSyste
   }
   
   // 在colorSystemMapping中查找对应的hex值
+  const mappingSystem = getMappingSystem(colorSystem);
   for (const [hex, mapping] of Object.entries(typedColorSystemMapping)) {
-    if (mapping[colorSystem] === displayKey) {
+    if (isColorAvailableInSystem(hex, colorSystem) && mapping[mappingSystem] === displayKey) {
       return hex;
     }
   }
@@ -98,19 +122,20 @@ export function convertColorKeyToHex(displayKey: string, colorSystem: ColorSyste
 
 // 验证颜色在指定系统中是否有效
 export function isValidColorInSystem(hexValue: string, colorSystem: ColorSystem): boolean {
-  const mapping = typedColorSystemMapping[hexValue];
-  return mapping && mapping[colorSystem] !== undefined;
+  return isColorAvailableInSystem(hexValue, colorSystem);
 }
 
 // 通过hex值获取指定色号系统的色号
 export function getColorKeyByHex(hexValue: string, colorSystem: ColorSystem): string {
   // 标准化hex值（确保大写）
   const normalizedHex = hexValue.toUpperCase();
+  if (!isColorAvailableInSystem(normalizedHex, colorSystem)) return '?';
   
   // 查找映射
   const mapping = typedColorSystemMapping[normalizedHex];
-  if (mapping && mapping[colorSystem]) {
-    return mapping[colorSystem];
+  const mappingSystem = getMappingSystem(colorSystem);
+  if (mapping && mapping[mappingSystem]) {
+    return mapping[mappingSystem];
   }
   
   // 如果找不到映射，返回 '?'

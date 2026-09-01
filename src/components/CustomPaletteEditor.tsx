@@ -93,9 +93,9 @@ const CustomPaletteEditor: React.FC<CustomPaletteEditorProps> = ({
   
   // 计算已选择的颜色数量
   useEffect(() => {
-    const count = Object.values(currentSelections).filter(Boolean).length;
+    const count = allColors.filter(color => currentSelections[color.hex.toUpperCase()]).length;
     setSelectedCount(count);
-  }, [currentSelections]);
+  }, [allColors, currentSelections]);
   
   // 根据搜索词过滤颜色
   const filteredColors = searchTerm 
@@ -310,4 +310,4 @@ const CustomPaletteEditor: React.FC<CustomPaletteEditorProps> = ({
   );
 };
 
-export default CustomPaletteEditor; 
+export default CustomPaletteEditor;

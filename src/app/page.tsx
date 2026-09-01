@@ -29,10 +29,10 @@ import {
 
 import { 
   colorSystemOptions, 
-  convertPaletteToColorSystem, 
   getColorKeyByHex,
   getMappedColorDisplayKey,
   getMardToHexMapping,
+  isColorAvailableInSystem,
   isCustomColorKey,
   sortColorsByHue,
   ColorSystem 
@@ -135,7 +135,7 @@ export default function Home() {
   const [pixelationMode, setPixelationMode] = useState<PixelationMode>(PixelationMode.Dominant); // 默认为卡通模式
   
   // 新增：色号系统选择状态
-  const [selectedColorSystem, setSelectedColorSystem] = useState<ColorSystem>('MARD');
+  const [selectedColorSystem, setSelectedColorSystem] = useState<ColorSystem>('通用221色');
   // 新增：色号系统折叠状态
   const [isColorSystemCollapsed, setIsColorSystemCollapsed] = useState<boolean>(true);
   
@@ -331,19 +331,6 @@ export default function Home() {
 
   // --- Derived State ---
 
-  // Update active palette based on selection and exclusions
-  useEffect(() => {
-    const newActiveBeadPalette = fullBeadPalette.filter(color => {
-      const normalizedHex = color.hex.toUpperCase();
-      const isSelectedInCustomPalette = customPaletteSelections[normalizedHex];
-      const isNotExcluded = !excludedColorKeys.has(normalizedHex);
-      return isSelectedInCustomPalette && isNotExcluded;
-    });
-    // 根据选择的色号系统转换调色板
-    const convertedPalette = convertPaletteToColorSystem(newActiveBeadPalette, selectedColorSystem);
-    setActiveBeadPalette(convertedPalette);
-  }, [customPaletteSelections, excludedColorKeys, remapTrigger, selectedColorSystem]);
-
   // ++ 添加：当状态变化时同步更新输入框的值 ++
   useEffect(() => {
     setGranularityInput(granularity.toString());
@@ -525,7 +512,7 @@ export default function Home() {
     setIsCustomPalette(true);
     } else {
         console.log('所有数据都无效，清除localStorage并重新初始化');
-        // 如果本地数据无效，清除localStorage并默认选择所有颜色
+        // 如果本地数据无效，清除localStorage并重新初始化
         localStorage.removeItem('customPerlerPaletteSelections');
         const allHexValues = fullBeadPalette.map(color => color.hex.toUpperCase());
         const initialSelections = presetToSelections(allHexValues, allHexValues);
@@ -533,8 +520,8 @@ export default function Home() {
       setIsCustomPalette(false);
     }
     } else {
-      console.log('没有localStorage数据，默认选择所有颜色');
-      // 如果没有保存的选择，默认选择所有颜色
+      console.log('没有localStorage数据，默认启用当前色号系统的全部颜色');
+      // 保留各品牌的全色数据，实际可用颜色由当前色号系统进一步限定
       const allHexValues = fullBeadPalette.map(color => color.hex.toUpperCase());
       const initialSelections = presetToSelections(allHexValues, allHexValues);
       setCustomPaletteSelections(initialSelections);
@@ -587,18 +574,19 @@ export default function Home() {
     }, 250);
   }, [resizePixelatedCanvasForGrid]);
 
-  // 更新 activeBeadPalette 基于自定义选择和排除列表
+  // 更新 activeBeadPalette 基于品牌色号、自定义选择和排除列表
   useEffect(() => {
     const newActiveBeadPalette = fullBeadPalette.filter(color => {
       const normalizedHex = color.hex.toUpperCase();
       const isSelectedInCustomPalette = customPaletteSelections[normalizedHex];
       // 使用hex值进行排除检查
       const isNotExcluded = !excludedColorKeys.has(normalizedHex);
-      return isSelectedInCustomPalette && isNotExcluded;
+      const isAvailableInSystem = isColorAvailableInSystem(normalizedHex, selectedColorSystem);
+      return isSelectedInCustomPalette && isNotExcluded && isAvailableInSystem;
     });
     // 不进行色号系统转换，保持原始的MARD色号和hex值
     setActiveBeadPalette(newActiveBeadPalette);
-  }, [customPaletteSelections, excludedColorKeys, remapTrigger]);
+  }, [customPaletteSelections, excludedColorKeys, remapTrigger, selectedColorSystem]);
 
   // --- Event Handlers ---
 
@@ -1379,7 +1367,7 @@ export default function Home() {
         // setTotalBeadCount(0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [originalImageSrc, granularity, similarityThreshold, maxColorCount, customPaletteSelections, pixelationMode, remapTrigger]);
+  }, [originalImageSrc, granularity, similarityThreshold, maxColorCount, activeBeadPalette, pixelationMode, remapTrigger]);
 
   // 确保文件输入框引用在组件挂载后正确设置
   useEffect(() => {
@@ -2022,6 +2010,30 @@ export default function Home() {
     setInitialGridColorKeys(new Set(Object.keys(newColorCounts)));
   };
 
+  const finishMirrorOperation = (newPixelData: MappedPixel[][]) => {
+    updatePixelDataAndCounts(newPixelData);
+    setSelectedCellAction(null);
+    setTooltipData(null);
+    setSelectedRegionCells([]);
+    setMagnifierSelectionArea(null);
+  };
+
+  const handleHorizontalMirror = () => {
+    if (!mappedPixelData) return;
+
+    finishMirrorOperation(
+      mappedPixelData.map(row => row.map(cell => ({ ...cell })).reverse())
+    );
+  };
+
+  const handleVerticalMirror = () => {
+    if (!mappedPixelData) return;
+
+    finishMirrorOperation(
+      mappedPixelData.slice().reverse().map(row => row.map(cell => ({ ...cell })))
+    );
+  };
+
   const handleDeleteSelectedCell = () => {
     if (!selectedCellAction || !mappedPixelData) return;
     const { row, col } = selectedCellAction;
@@ -2632,12 +2644,24 @@ export default function Home() {
     setTooltipData(null);
   };
 
+  const paletteColorsForSelectedSystem = useMemo(
+    () => fullBeadPalette.filter(color => isColorAvailableInSystem(color.hex, selectedColorSystem)),
+    [selectedColorSystem]
+  );
+
+  const selectedPaletteColorCount = useMemo(
+    () => paletteColorsForSelectedSystem.filter(
+      color => customPaletteSelections[color.hex.toUpperCase()]
+    ).length,
+    [customPaletteSelections, paletteColorsForSelectedSystem]
+  );
+
   // 生成完整色板数据（用户自定义色板中选中的所有颜色）
   const fullPaletteColors = useMemo(() => {
     const selectedColors: { key: string; color: string }[] = [];
     
     Object.entries(customPaletteSelections).forEach(([hexValue, isSelected]) => {
-      if (isSelected) {
+      if (isSelected && isColorAvailableInSystem(hexValue, selectedColorSystem)) {
         // 根据选择的色号系统获取显示的色号
         const displayKey = getColorKeyByHex(hexValue, selectedColorSystem);
         selectedColors.push({
@@ -2957,6 +2981,30 @@ export default function Home() {
                   >
                     一键去背景
                   </button>
+                  <button
+                    type="button"
+                    onClick={handleHorizontalMirror}
+                    disabled={!mappedPixelData || !gridDimensions}
+                    className="inline-flex items-center justify-center h-9 px-3 text-sm rounded-md border border-cyan-200 dark:border-cyan-700 bg-cyan-50 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-200 hover:bg-cyan-100 dark:hover:bg-cyan-800/40 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                    title="将当前图纸左右镜像"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16M9 8 5 12l4 4m6-8 4 4-4 4" />
+                    </svg>
+                    水平镜像
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleVerticalMirror}
+                    disabled={!mappedPixelData || !gridDimensions}
+                    className="inline-flex items-center justify-center h-9 px-3 text-sm rounded-md border border-cyan-200 dark:border-cyan-700 bg-cyan-50 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-200 hover:bg-cyan-100 dark:hover:bg-cyan-800/40 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                    title="将当前图纸上下镜像"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12h16M8 9l4-4 4 4m-8 6 4 4 4-4" />
+                    </svg>
+                    垂直镜像
+                  </button>
                 </div>
 
                 {/* Pixelation Mode Selector */}
@@ -3021,7 +3069,7 @@ export default function Home() {
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                             <path fillRule="evenodd" d="M4 2a2 2 0 00-2 2v11a3 3 0 106 0V4a2 2 0 00-2-2H4zm1 14a1 1 0 100-2 1 1 0 000 2zm5-1.757l4.9-4.9a2 2 0 000-2.828L13.485 5.1a2 2 0 00-2.828 0L10 5.757v8.486zM16 18H9.071l6-6H16a2 2 0 012 2v2a2 2 0 01-2 2z" clipRule="evenodd" />
                           </svg>
-                          管理色板 ({Object.values(customPaletteSelections).filter(Boolean).length} 色)
+                          管理色板 ({selectedPaletteColorCount} 色)
                         </button>
                         {isCustomPalette && (
                           <p className="text-xs text-center text-blue-500 dark:text-blue-400 mt-1.5">当前使用自定义色板</p>
@@ -3047,7 +3095,7 @@ export default function Home() {
                   />
                   <div className="p-4 sm:p-6 flex-1 overflow-y-auto"> {/* 让内容区域可滚动 */}
                     <CustomPaletteEditor
-                      allColors={fullBeadPalette}
+                      allColors={paletteColorsForSelectedSystem}
                       currentSelections={customPaletteSelections}
                       onSelectionChange={handleSelectionChange}
                       onSaveCustomPalette={handleSaveCustomPalette}

@@ -10,6 +10,7 @@ import {
 import {
   ColorSystem,
   getMardToHexMapping,
+  isColorAvailableInSystem,
 } from './colorSystemUtils';
 import { cropPixelDataToContent, TRANSPARENT_KEY, transparentColorData } from './pixelEditingUtils';
 import { loadPaletteSelections, PaletteSelections, presetToSelections } from './localStorageUtils';
@@ -36,7 +37,7 @@ export const DEFAULT_PATTERN_GENERATION_OPTIONS: PatternGenerationOptions = {
   similarityThreshold: 12,
   maxColorCount: 8,
   pixelationMode: PixelationMode.Dominant,
-  selectedColorSystem: 'MARD',
+  selectedColorSystem: '通用221色',
   autoRemoveBackground: true,
 };
 
@@ -72,12 +73,14 @@ function loadSingleToolPaletteSelections(allHexValues: string[]): PaletteSelecti
 }
 
 export function buildDefaultBeadPalette(colorSystem: ColorSystem): PaletteColor[] {
-  void colorSystem;
   const fullPalette = buildFullHexBeadPalette();
   const allHexValues = fullPalette.map((color) => color.hex.toUpperCase());
   const paletteSelections = loadSingleToolPaletteSelections(allHexValues);
 
-  return fullPalette.filter((color) => paletteSelections[color.hex.toUpperCase()]);
+  return fullPalette.filter((color) => (
+    paletteSelections[color.hex.toUpperCase()]
+    && isColorAvailableInSystem(color.hex, colorSystem)
+  ));
 }
 
 function loadImageElement(imageSrc: string): Promise<HTMLImageElement> {

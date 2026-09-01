@@ -19,7 +19,7 @@ function isPixelationMode(value: unknown): value is PixelationMode {
 }
 
 function isColorSystem(value: unknown): value is ColorSystem {
-  return value === 'MARD' || value === 'COCO' || value === '漫漫' || value === '盼盼' || value === '咪小窝';
+  return value === '通用221色' || value === 'MARD' || value === 'COCO' || value === '漫漫' || value === '盼盼' || value === '咪小窝';
 }
 
 function isMappedPixelGrid(value: unknown): value is MappedPixel[][] {
