@@ -215,7 +215,6 @@ interface DownloadImageParams {
 
 export interface DownloadImagePreviewResult {
   imageUrl: string;
-  dataURL: string;
   blob: Blob;
   filename: string;
 }
@@ -267,11 +266,15 @@ export function releaseDownloadImagePreviewUrl(imageUrl?: string | null): void {
 }
 
 function getDownloadCellSize(N: number, M: number): number {
+  // Keep the downloadable original dense enough for local zooming. The
+  // competitor-style layout previously reduced large patterns to 10-14 px per
+  // cell, which made grid lines and labels visibly soft after zooming. This
+  // restores the earlier 30 px target while still capping very large grids.
+  const maxGridSide = 7200;
   const largestSide = Math.max(N, M);
-  if (largestSide <= 64) return 28;
-  if (largestSide <= 110) return 20;
-  if (largestSide <= 180) return 14;
-  return 10;
+  if (largestSide <= 0) return 30;
+
+  return Math.max(8, Math.min(30, Math.floor(maxGridSide / largestSide)));
 }
 
 export async function saveImageBlob(blob: Blob, filename: string): Promise<void> {
@@ -412,16 +415,18 @@ export async function generateDownloadImagePreview({
     }
   }
 
+  // Use integer line widths and pixel-aligned coordinates. Fractional strokes
+  // such as 0.75 px are anti-aliased by Canvas and look blurred when zoomed.
   ctx.strokeStyle = minorLineColor;
-  ctx.lineWidth = cellSize <= 14 ? 0.55 : 0.75;
+  ctx.lineWidth = 1;
   ctx.beginPath();
   for (let col = 1; col < N; col++) {
-    const lineX = originX + col * cellSize;
+    const lineX = originX + col * cellSize + 0.5;
     ctx.moveTo(lineX, originY);
     ctx.lineTo(lineX, gridBottom);
   }
   for (let row = 1; row < M; row++) {
-    const lineY = originY + row * cellSize;
+    const lineY = originY + row * cellSize + 0.5;
     ctx.moveTo(originX, lineY);
     ctx.lineTo(originX + gridWidth, lineY);
   }
@@ -429,7 +434,7 @@ export async function generateDownloadImagePreview({
 
   if (showGrid) {
     ctx.strokeStyle = majorLineColor;
-    ctx.lineWidth = cellSize <= 14 ? 1.1 : 1.5;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     for (let col = Math.max(1, gridInterval); col < N; col += Math.max(1, gridInterval)) {
       const lineX = originX + col * cellSize;
@@ -445,8 +450,8 @@ export async function generateDownloadImagePreview({
   }
 
   ctx.strokeStyle = outerLineColor;
-  ctx.lineWidth = cellSize <= 14 ? 1.2 : 1.8;
-  ctx.strokeRect(originX + 0.5, originY + 0.5, gridWidth, gridHeight);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(originX, originY, gridWidth, gridHeight);
 
   if (includeStats && colorKeys.length > 0) {
     const statsTop = gridBottom + coordinateBand + statsGap;
@@ -506,11 +511,18 @@ export async function generateDownloadImagePreview({
 
   try {
     const blob = await canvasToPngBlob(canvas);
-    const dataURL = canvas.toDataURL('image/png');
+    const imageUrl = URL.createObjectURL(blob);
     const filename = showCellNumbers
       ? `bead-grid-${N}x${M}-keys-palette_${selectedColorSystem}.png`
       : `bead-grid-${N}x${M}-pixel-palette_${selectedColorSystem}.png`;
-    return { imageUrl: dataURL, dataURL, blob, filename };
+
+    // The encoded Blob is independent from the Canvas. Releasing the backing
+    // store here avoids keeping a high-resolution canvas and a Base64 copy in
+    // memory at the same time on mobile devices.
+    canvas.width = 1;
+    canvas.height = 1;
+
+    return { imageUrl, blob, filename };
   } catch (error) {
     console.error('生成图纸失败:', error);
     alert('无法生成图纸。');
@@ -524,8 +536,7 @@ export async function downloadImage(params: DownloadImageParams): Promise<void> 
   if (!result) return;
 
   try {
-    triggerDataUrlDownload(result.dataURL, result.filename);
-    releaseDownloadImagePreviewUrl(result.imageUrl);
+    await saveImageBlob(result.blob, result.filename);
     console.log("Grid image download initiated.");
 
     // 如果启用了CSV导出，同时导出CSV文件
@@ -539,5 +550,7 @@ export async function downloadImage(params: DownloadImageParams): Promise<void> 
   } catch (e) {
     console.error("下载图纸失败:", e);
     alert("无法生成图纸下载链接。");
+  } finally {
+    releaseDownloadImagePreviewUrl(result.imageUrl);
   }
 } 
