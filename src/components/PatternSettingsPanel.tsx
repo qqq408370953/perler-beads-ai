@@ -1,7 +1,9 @@
 'use client';
 
-import type { CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
+import type { ChangeEvent, CSSProperties, KeyboardEvent } from 'react';
 import type { ColorSystem } from '../utils/colorSystemUtils';
+import { normalizeColorCountInput } from '../utils/colorCountInput';
 import MobileSafeRange from './MobileSafeRange';
 
 export type PatternPresetId = 'economy' | 'balanced' | 'portrait' | 'detailed' | 'large';
@@ -110,6 +112,78 @@ function RangeCard({
   );
 }
 
+function ColorCountInputCard({
+  value,
+  max,
+  onChange,
+}: {
+  value: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  const [draftValue, setDraftValue] = useState(String(value));
+
+  useEffect(() => {
+    setDraftValue(String(value));
+  }, [value]);
+
+  const commitValue = () => {
+    const nextValue = normalizeColorCountInput(draftValue, value, max);
+    setDraftValue(String(nextValue));
+    if (nextValue !== value) onChange(nextValue);
+  };
+
+  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextDraftValue = event.currentTarget.value;
+    setDraftValue(nextDraftValue);
+
+    if (!/^\d+$/.test(nextDraftValue)) return;
+
+    const nextValue = Number(nextDraftValue);
+    if (nextValue >= 1 && nextValue <= max && nextValue !== value) {
+      onChange(nextValue);
+    }
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') event.currentTarget.blur();
+  };
+
+  return (
+    <section className={cardClass}>
+      <SettingHeader title="色彩数量" value={`${value} / ${max} 种`} />
+      <div className="flex items-center justify-center gap-3">
+        <label htmlFor="pattern-color-count" className="text-sm font-bold text-[#736d64] dark:text-gray-300">
+          使用颜色
+        </label>
+        <div className="flex items-center overflow-hidden rounded-xl border border-[#ddd5c9] bg-[#fffefa] shadow-inner focus-within:border-[#f28a2e] focus-within:ring-2 focus-within:ring-[#f28a2e]/20 dark:border-gray-600 dark:bg-gray-700">
+          <input
+            id="pattern-color-count"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={max}
+            step={1}
+            value={draftValue}
+            onChange={handleChange}
+            onBlur={commitValue}
+            onKeyDown={handleKeyDown}
+            onWheel={(event) => event.currentTarget.blur()}
+            className="h-12 w-24 bg-transparent px-3 text-center text-lg font-black text-[#2d2924] outline-none dark:text-gray-100"
+            aria-label={`色彩数量，范围 1 到 ${max}`}
+          />
+          <span className="border-l border-[#e6dfd4] px-3 text-sm font-bold text-[#736d64] dark:border-gray-600 dark:text-gray-300">
+            种
+          </span>
+        </div>
+      </div>
+      <p className="mt-2 text-center text-xs font-medium text-[#aaa297] dark:text-gray-400">
+        手动输入 1–{max} 之间的整数
+      </p>
+    </section>
+  );
+}
+
 export default function PatternSettingsPanel({
   presets,
   selectedPreset,
@@ -207,15 +281,9 @@ export default function PatternSettingsPanel({
         onChange={onGranularityChange}
       />
 
-      <RangeCard
-        title="色彩数量"
-        valueLabel={`${maxColorCount} / ${effectivePaletteCount} 种`}
+      <ColorCountInputCard
         value={Math.min(maxColorCount, effectivePaletteCount)}
-        min={1}
         max={effectivePaletteCount}
-        lowLabel="简约"
-        highLabel="丰富"
-        accent="#f05b59"
         onChange={onMaxColorCountChange}
       />
 
