@@ -279,14 +279,71 @@ function limitColorCount(
     .map(([key]) => key);
   if (colorsByFrequency.length <= maxColorCount) return limitedData;
 
-  const keptKeys = colorsByFrequency.slice(0, maxColorCount);
+  // 以“减少全图感知色差最多”为目标逐个选择代表色，避免名额全被同一色系占满。
+  const usableColors = colorsByFrequency
+    .map((key) => {
+      const color = paletteByKey.get(key);
+      return color ? { key, color, count: colorCounts.get(key) ?? 0, lab: rgbToOklab(color.rgb) } : null;
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  // 仅把单格颜色视为不可靠候选。门槛不能随整图面积增长，否则高分辨率图里
+  // 真实存在的眼睛、轮廓和高光会因为占比小而失去代表色资格。
+  const minimumRepresentativeSupport = 2;
+  const representativeCandidates = usableColors.filter(
+    (item) => item.count >= minimumRepresentativeSupport,
+  );
+  const selectionPool = representativeCandidates.length > 0
+    ? representativeCandidates
+    : usableColors.slice(0, 1);
+  const keptKeys = selectionPool.length > 0 ? [selectionPool[0].key] : [];
   const keptKeySet = new Set(keptKeys);
+  const nearestDistance = new Map<string, number>();
+
+  if (usableColors.length > 0) {
+    usableColors.forEach((item) => {
+      nearestDistance.set(item.key, oklabDistance(item.lab, selectionPool[0].lab));
+    });
+  }
+
+  while (keptKeys.length < Math.min(maxColorCount, selectionPool.length)) {
+    let bestCandidate: typeof selectionPool[number] | null = null;
+    let bestGain = -1;
+
+    selectionPool.forEach((candidate) => {
+      if (keptKeySet.has(candidate.key)) return;
+      let gain = 0;
+      usableColors.forEach((item) => {
+        const currentDistance = nearestDistance.get(item.key) ?? Infinity;
+        const candidateDistance = oklabDistance(item.lab, candidate.lab);
+        gain += item.count * Math.max(0, currentDistance - candidateDistance);
+      });
+      if (
+        gain > bestGain
+        || (gain === bestGain && bestCandidate && candidate.count > bestCandidate.count)
+      ) {
+        bestCandidate = candidate;
+        bestGain = gain;
+      }
+    });
+
+    if (!bestCandidate) break;
+    const selectedCandidate = bestCandidate as typeof selectionPool[number];
+    keptKeys.push(selectedCandidate.key);
+    keptKeySet.add(selectedCandidate.key);
+    usableColors.forEach((item) => {
+      const candidateDistance = oklabDistance(item.lab, selectedCandidate.lab);
+      nearestDistance.set(
+        item.key,
+        Math.min(nearestDistance.get(item.key) ?? Infinity, candidateDistance),
+      );
+    });
+  }
   const keptColors = keptKeys
     .map((key) => paletteByKey.get(key))
     .filter((color): color is PaletteColor => Boolean(color));
   const replacementByKey = new Map<string, PaletteColor>();
 
-  colorsByFrequency.slice(maxColorCount).forEach((droppedKey) => {
+  colorsByFrequency.filter((key) => !keptKeySet.has(key)).forEach((droppedKey) => {
     const droppedColor = paletteByKey.get(droppedKey);
     if (!droppedColor || keptColors.length === 0) return;
     replacementByKey.set(
@@ -313,6 +370,64 @@ function limitColorCount(
   return limitedData;
 }
 
+function smoothLocallyInconsistentColors(
+  sourceData: MappedPixel[][],
+  dimensions: { N: number; M: number },
+  paletteByKey: Map<string, PaletteColor>,
+): MappedPixel[][] {
+  const { N, M } = dimensions;
+  const smoothedData = clonePixelData(sourceData);
+  const neighbors = [
+    [-1, -1], [-1, 0], [-1, 1],
+    [0, -1], [0, 1],
+    [1, -1], [1, 0], [1, 1],
+  ] as const;
+
+  for (let row = 0; row < M; row++) {
+    for (let col = 0; col < N; col++) {
+      const cell = sourceData[row]?.[col];
+      if (!isVisibleCell(cell) || !cell.sourceRgb) continue;
+
+      const neighborCounts = new Map<string, number>();
+      let visibleNeighborCount = 0;
+      neighbors.forEach(([rowOffset, colOffset]) => {
+        const neighbor = sourceData[row + rowOffset]?.[col + colOffset];
+        if (!isVisibleCell(neighbor)) return;
+        visibleNeighborCount++;
+        neighborCounts.set(neighbor.key, (neighborCounts.get(neighbor.key) ?? 0) + 1);
+      });
+      if (visibleNeighborCount < 5 || neighborCounts.size === 0) continue;
+
+      const [dominantKey, dominantCount] = [...neighborCounts.entries()]
+        .sort((first, second) => second[1] - first[1])[0];
+      if (
+        dominantKey === cell.key
+        || dominantCount < 5
+        || dominantCount / visibleNeighborCount < 0.625
+      ) {
+        continue;
+      }
+
+      const currentColor = paletteByKey.get(cell.key);
+      const replacementColor = paletteByKey.get(dominantKey);
+      if (!currentColor || !replacementColor) continue;
+      const sourceLab = rgbToOklab(cell.sourceRgb);
+      const currentDistance = oklabDistance(sourceLab, rgbToOklab(currentColor.rgb));
+      const replacementDistance = oklabDistance(sourceLab, rgbToOklab(replacementColor.rgb));
+
+      // 只有邻色同样能合理解释原图采样时才替换；强证据的眼睛、轮廓和高光保持不动。
+      if (replacementDistance + 0.01 > currentDistance) continue;
+      smoothedData[row][col] = {
+        ...cell,
+        key: replacementColor.key,
+        color: replacementColor.hex,
+      };
+    }
+  }
+
+  return smoothedData;
+}
+
 export function removeIsolatedColorNoise(
   sourceData: MappedPixel[][],
   dimensions: { N: number; M: number },
@@ -320,6 +435,7 @@ export function removeIsolatedColorNoise(
 ): MappedPixel[][] {
   const { N, M } = dimensions;
   const paletteByKey = new Map(palette.map((color) => [color.key, color]));
+  const workingData = smoothLocallyInconsistentColors(sourceData, dimensions, paletteByKey);
   const visited = Array.from({ length: M }, () => Array(N).fill(false));
   const replacements: Array<{ row: number; col: number; color: PaletteColor }> = [];
   const maxComponentSize = 3;
@@ -333,7 +449,7 @@ export function removeIsolatedColorNoise(
   for (let startRow = 0; startRow < M; startRow++) {
     for (let startCol = 0; startCol < N; startCol++) {
       if (visited[startRow][startCol]) continue;
-      const startCell = sourceData[startRow]?.[startCol];
+      const startCell = workingData[startRow]?.[startCol];
       if (!isVisibleCell(startCell)) {
         visited[startRow][startCol] = true;
         continue;
@@ -341,16 +457,24 @@ export function removeIsolatedColorNoise(
 
       const component: Array<{ row: number; col: number }> = [];
       const stack = [{ row: startRow, col: startCol }];
+      let minRow = startRow;
+      let maxRow = startRow;
+      let minCol = startCol;
+      let maxCol = startCol;
       visited[startRow][startCol] = true;
 
       while (stack.length > 0) {
         const current = stack.pop()!;
         component.push(current);
+        minRow = Math.min(minRow, current.row);
+        maxRow = Math.max(maxRow, current.row);
+        minCol = Math.min(minCol, current.col);
+        maxCol = Math.max(maxCol, current.col);
         cardinalNeighbors.forEach(([rowOffset, colOffset]) => {
           const row = current.row + rowOffset;
           const col = current.col + colOffset;
           if (row < 0 || row >= M || col < 0 || col >= N || visited[row][col]) return;
-          const neighbor = sourceData[row]?.[col];
+          const neighbor = workingData[row]?.[col];
           if (isVisibleCell(neighbor) && neighbor.key === startCell.key) {
             visited[row][col] = true;
             stack.push({ row, col });
@@ -358,7 +482,12 @@ export function removeIsolatedColorNoise(
         });
       }
 
-      if (component.length > maxComponentSize) continue;
+      const componentHeight = maxRow - minRow + 1;
+      const componentWidth = maxCol - minCol + 1;
+      const isSmallComponent = component.length <= maxComponentSize;
+      const isNarrowComponent = component.length <= 24
+        && Math.min(componentWidth, componentHeight) <= 2;
+      if (!isSmallComponent && !isNarrowComponent) continue;
 
       const componentPositions = new Set(component.map(({ row, col }) => `${row}:${col}`));
       const boundaryPositions = new Set<string>();
@@ -374,7 +503,7 @@ export function removeIsolatedColorNoise(
           }
           const positionKey = `${neighborRow}:${neighborCol}`;
           if (componentPositions.has(positionKey)) return;
-          const neighbor = sourceData[neighborRow]?.[neighborCol];
+          const neighbor = workingData[neighborRow]?.[neighborCol];
           if (!isVisibleCell(neighbor)) {
             touchesEmptyCell = true;
             return;
@@ -388,7 +517,7 @@ export function removeIsolatedColorNoise(
       const neighborCounts = new Map<string, number>();
       boundaryPositions.forEach((positionKey) => {
         const [row, col] = positionKey.split(':').map(Number);
-        const neighbor = sourceData[row][col];
+        const neighbor = workingData[row][col];
         neighborCounts.set(neighbor.key, (neighborCounts.get(neighbor.key) ?? 0) + 1);
       });
       const [dominantNeighborKey, dominantNeighborCount] = [...neighborCounts.entries()]
@@ -412,11 +541,33 @@ export function removeIsolatedColorNoise(
         && sourceLab.l - replacementLab.l >= 0.025
         && sourceChroma <= 0.08
       );
+      let evidenceCellCount = 0;
+      let replacementEvidenceCount = 0;
+      if (sourceColor && replacementColor) {
+        const currentLab = rgbToOklab(sourceColor.rgb);
+        const replacementColorLab = rgbToOklab(replacementColor.rgb);
+        component.forEach(({ row, col }) => {
+          const sourceRgb = workingData[row]?.[col]?.sourceRgb;
+          if (!sourceRgb) return;
+          evidenceCellCount++;
+          const evidenceLab = rgbToOklab(sourceRgb);
+          const currentDistance = oklabDistance(evidenceLab, currentLab);
+          const replacementDistance = oklabDistance(evidenceLab, replacementColorLab);
+          if (replacementDistance + 0.01 <= currentDistance) replacementEvidenceCount++;
+        });
+      }
+      const hasSourceEvidence = evidenceCellCount > 0;
+      const hasAffirmativeReplacementEvidence = evidenceCellCount >= component.length * 0.75
+        && replacementEvidenceCount / evidenceCellCount >= 0.75;
       if (
         !sourceColor
         || !replacementColor
         || isSubtleHighlight
-        || perceptualColorDistance(sourceColor.rgb, replacementColor.rgb) > MAX_NOISE_COLOR_DISTANCE
+        || (hasSourceEvidence && !hasAffirmativeReplacementEvidence)
+        || (
+          !hasAffirmativeReplacementEvidence
+          && perceptualColorDistance(sourceColor.rgb, replacementColor.rgb) > MAX_NOISE_COLOR_DISTANCE
+        )
       ) {
         continue;
       }
@@ -425,7 +576,12 @@ export function removeIsolatedColorNoise(
     }
   }
 
-  const denoisedData = clonePixelData(sourceData);
+  // 在最终克隆时一并移除瞬态原图证据，避免移动端再创建一份完整网格。
+  const denoisedData = workingData.map((row) => row.map((cell) => {
+    const finalCell = { ...cell };
+    delete finalCell.sourceRgb;
+    return finalCell;
+  }));
   replacements.forEach(({ row, col, color }) => {
     denoisedData[row][col] = {
       ...denoisedData[row][col],

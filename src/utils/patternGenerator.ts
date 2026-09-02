@@ -17,7 +17,7 @@ import {
   isColorAvailableInSystem,
 } from './colorSystemUtils';
 import { cropPixelDataToContent, TRANSPARENT_KEY, transparentColorData } from './pixelEditingUtils';
-import { loadPaletteSelections, PaletteSelections, presetToSelections } from './localStorageUtils';
+import { selectGenerationPalette } from './paletteSelection';
 
 export interface PatternGenerationOptions {
   granularity: number;
@@ -56,35 +56,12 @@ function buildFullHexBeadPalette(): PaletteColor[] {
     .filter((color): color is PaletteColor => color !== null);
 }
 
-function loadSingleToolPaletteSelections(allHexValues: string[]): PaletteSelections {
-  const savedSelections = loadPaletteSelections();
-  if (!savedSelections || Object.keys(savedSelections).length === 0) {
-    return presetToSelections(allHexValues, allHexValues);
-  }
-
-  const allHexSet = new Set(allHexValues);
-  const validSelections: PaletteSelections = {};
-  Object.entries(savedSelections).forEach(([key, value]) => {
-    const normalizedHex = key.toUpperCase();
-    if (/^#[0-9A-F]{6}$/i.test(normalizedHex) && allHexSet.has(normalizedHex)) {
-      validSelections[normalizedHex] = value;
-    }
-  });
-
-  return Object.keys(validSelections).length > 0
-    ? validSelections
-    : presetToSelections(allHexValues, allHexValues);
-}
-
 export function buildDefaultBeadPalette(colorSystem: ColorSystem): PaletteColor[] {
-  const fullPalette = buildFullHexBeadPalette();
-  const allHexValues = fullPalette.map((color) => color.hex.toUpperCase());
-  const paletteSelections = loadSingleToolPaletteSelections(allHexValues);
-
-  return fullPalette.filter((color) => (
-    paletteSelections[color.hex.toUpperCase()]
-    && isColorAvailableInSystem(color.hex, colorSystem)
-  ));
+  return selectGenerationPalette({
+    palette: buildFullHexBeadPalette().filter((color) => (
+      isColorAvailableInSystem(color.hex, colorSystem)
+    )),
+  });
 }
 
 function loadImageElement(imageSrc: string): Promise<HTMLImageElement> {

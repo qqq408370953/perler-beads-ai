@@ -1,8 +1,8 @@
 import { transparentColorData } from './pixelEditingUtils';
 import {
-  calculateQuantizedDominantColor,
   findClosestPerceptualPaletteColor,
 } from './patternColorProcessing';
+import { calculateRepresentativeRgbGrid } from './sourceGridSampling';
 
 // 定义像素化模式
 export enum PixelationMode {
@@ -30,6 +30,7 @@ export interface MappedPixel {
   key: string;
   color: string;
   isExternal?: boolean;
+  sourceRgb?: RgbColor;
 }
 
 // --- 辅助函数 ---
@@ -70,71 +71,6 @@ export function findClosestPaletteColor(
 // --- 核心像素化计算逻辑 ---
 
 /**
- * 计算图像指定区域的代表色（根据所选模式）
- * @param imageData 包含像素数据的 ImageData 对象
- * @param startX 区域起始 X 坐标
- * @param startY 区域起始 Y 坐标
- * @param width 区域宽度
- * @param height 区域高度
- * @param mode 计算模式 ('dominant' 或 'average')
- * @returns 代表色的 RGB 对象，或 null（如果区域无效或全透明）
- */
-function calculateCellRepresentativeColor(
-    imageData: ImageData,
-    startX: number,
-    startY: number,
-    width: number,
-    height: number,
-    mode: PixelationMode
-): RgbColor | null {
-    const data = imageData.data;
-    const imgWidth = imageData.width;
-    let rSum = 0, gSum = 0, bSum = 0;
-    let pixelCount = 0;
-    const endX = startX + width;
-    const endY = startY + height;
-
-    if (mode === PixelationMode.Dominant) {
-        return calculateQuantizedDominantColor(
-            data,
-            imgWidth,
-            startX,
-            startY,
-            endX,
-            endY
-        );
-    }
-
-    for (let y = startY; y < endY; y++) {
-        for (let x = startX; x < endX; x++) {
-            const index = (y * imgWidth + x) * 4;
-            // 检查 alpha 通道，忽略完全透明的像素
-            if (data[index + 3] < 128) continue;
-
-            const r = data[index];
-            const g = data[index + 1];
-            const b = data[index + 2];
-
-            pixelCount++;
-
-            rSum += r;
-            gSum += g;
-            bSum += b;
-        }
-    }
-
-    if (pixelCount === 0) {
-        return null; // 区域内没有不透明像素
-    }
-
-    return {
-        r: Math.round(rSum / pixelCount),
-        g: Math.round(gSum / pixelCount),
-        b: Math.round(bSum / pixelCount),
-    };
-}
-
-/**
  * 根据原始图像数据、网格尺寸、调色板和模式计算像素化网格数据。
  * @param originalCtx 原始图像的 Canvas 2D Context
  * @param imgWidth 原始图像宽度
@@ -158,9 +94,6 @@ export function calculatePixelGrid(
 ): MappedPixel[][] {
     console.log(`Calculating pixel grid with mode: ${mode}`);
     const mappedData: MappedPixel[][] = Array(M).fill(null).map(() => Array(N).fill({ key: t1FallbackColor.key, color: t1FallbackColor.hex }));
-    const cellWidthOriginal = imgWidth / N;
-    const cellHeightOriginal = imgHeight / M;
-
     let fullImageData: ImageData | null = null;
     try {
         fullImageData = originalCtx.getImageData(0, 0, imgWidth, imgHeight);
@@ -170,31 +103,27 @@ export function calculatePixelGrid(
         return mappedData;
     }
 
+    const representativeGrid = calculateRepresentativeRgbGrid(
+        fullImageData.data,
+        imgWidth,
+        imgHeight,
+        N,
+        M,
+        mode,
+    );
+
     for (let j = 0; j < M; j++) {
         for (let i = 0; i < N; i++) {
-            const startXOriginal = Math.floor(i * cellWidthOriginal);
-            const startYOriginal = Math.floor(j * cellHeightOriginal);
-            // 计算精确的单元格结束位置，避免超出图像边界
-            const endXOriginal = Math.min(imgWidth, Math.ceil((i + 1) * cellWidthOriginal));
-            const endYOriginal = Math.min(imgHeight, Math.ceil((j + 1) * cellHeightOriginal));
-            // 计算实际的单元格宽高
-            const currentCellWidth = Math.max(1, endXOriginal - startXOriginal);
-            const currentCellHeight = Math.max(1, endYOriginal - startYOriginal);
-
-            // 使用提取的函数计算代表色
-            const representativeRgb = calculateCellRepresentativeColor(
-                fullImageData,
-                startXOriginal,
-                startYOriginal,
-                currentCellWidth,
-                currentCellHeight,
-                mode
-            );
+            const representativeRgb = representativeGrid[j]?.[i] ?? null;
 
             let finalCellColorData: MappedPixel;
             if (representativeRgb) {
                 const closestBead = findClosestPaletteColor(representativeRgb, palette);
-                finalCellColorData = { key: closestBead.key, color: closestBead.hex };
+                finalCellColorData = {
+                    key: closestBead.key,
+                    color: closestBead.hex,
+                    sourceRgb: representativeRgb,
+                };
             } else {
                 // 如果单元格为空或全透明，标记为透明/外部
                 finalCellColorData = { ...transparentColorData };

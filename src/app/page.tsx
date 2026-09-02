@@ -117,7 +117,15 @@ import FloatingColorPalette from '../components/FloatingColorPalette';
 import FloatingToolbar from '../components/FloatingToolbar';
 import MagnifierTool from '../components/MagnifierTool';
 import MagnifierSelectionOverlay from '../components/MagnifierSelectionOverlay';
-import { loadPaletteSelections, savePaletteSelections, presetToSelections, PaletteSelections } from '../utils/localStorageUtils';
+import {
+  loadPaletteMode,
+  loadPaletteSelections,
+  savePaletteMode,
+  savePaletteSelections,
+  presetToSelections,
+  PaletteSelections,
+} from '../utils/localStorageUtils';
+import { selectGenerationPalette } from '../utils/paletteSelection';
 import { cropPixelDataToContent, TRANSPARENT_KEY, transparentColorData } from '../utils/pixelEditingUtils';
 
 // 1. 导入新的 DonationModal 组件
@@ -200,6 +208,7 @@ export default function Home() {
   // 新增状态变量：控制教程弹窗
   const [isTutorialModalOpen, setIsTutorialModalOpen] = useState<boolean>(false);
   const [customPaletteSelections, setCustomPaletteSelections] = useState<PaletteSelections>({});
+  const [customPaletteDraftSelections, setCustomPaletteDraftSelections] = useState<PaletteSelections>({});
   const [isCustomPaletteEditorOpen, setIsCustomPaletteEditorOpen] = useState<boolean>(false);
   const [isCustomPalette, setIsCustomPalette] = useState<boolean>(false);
   
@@ -507,7 +516,11 @@ export default function Home() {
       
       Object.entries(savedSelections).forEach(([key, value]) => {
         // 严格验证：键必须是有效的hex格式，并且存在于调色板中
-        if (/^#[0-9A-F]{6}$/i.test(key) && allHexValues.includes(key.toUpperCase())) {
+        if (
+          /^#[0-9A-F]{6}$/i.test(key)
+          && allHexValues.includes(key.toUpperCase())
+          && typeof value === 'boolean'
+        ) {
           validSelections[key.toUpperCase()] = value;
           hasValidData = true;
           validCount++;
@@ -520,16 +533,17 @@ export default function Home() {
       
       if (hasValidData) {
         setCustomPaletteSelections(validSelections);
-    setIsCustomPalette(true);
-    } else {
+        setIsCustomPalette(loadPaletteMode());
+      } else {
         console.log('所有数据都无效，清除localStorage并重新初始化');
         // 如果本地数据无效，清除localStorage并重新初始化
         localStorage.removeItem('customPerlerPaletteSelections');
         const allHexValues = fullBeadPalette.map(color => color.hex.toUpperCase());
         const initialSelections = presetToSelections(allHexValues, allHexValues);
-      setCustomPaletteSelections(initialSelections);
-      setIsCustomPalette(false);
-    }
+        setCustomPaletteSelections(initialSelections);
+        setIsCustomPalette(false);
+        savePaletteMode(false);
+      }
     } else {
       console.log('没有localStorage数据，默认启用当前色号系统的全部颜色');
       // 保留各品牌的全色数据，实际可用颜色由当前色号系统进一步限定
@@ -576,6 +590,8 @@ export default function Home() {
     setOutlineEnabled(false);
     setPixelationMode(handoff.options.pixelationMode);
     setSelectedColorSystem(handoff.options.selectedColorSystem);
+    setIsCustomPalette(false);
+    savePaletteMode(false);
     setMappedPixelData(croppedHandoff.mappedPixelData);
     setGridDimensions(croppedHandoff.gridDimensions);
     setColorCounts(handoff.result.colorCounts);
@@ -593,19 +609,19 @@ export default function Home() {
     }, 250);
   }, [resizePixelatedCanvasForGrid]);
 
-  // 更新 activeBeadPalette 基于品牌色号、自定义选择和排除列表
+  // 更新 activeBeadPalette：品牌全色与自定义子集由显式模式区分，避免旧缓存暗中缩减色板
   useEffect(() => {
-    const newActiveBeadPalette = fullBeadPalette.filter(color => {
-      const normalizedHex = color.hex.toUpperCase();
-      const isSelectedInCustomPalette = customPaletteSelections[normalizedHex];
-      // 使用hex值进行排除检查
-      const isNotExcluded = !excludedColorKeys.has(normalizedHex);
-      const isAvailableInSystem = isColorAvailableInSystem(normalizedHex, selectedColorSystem);
-      return isSelectedInCustomPalette && isNotExcluded && isAvailableInSystem;
+    const newActiveBeadPalette = selectGenerationPalette({
+      palette: fullBeadPalette.filter((color) => (
+        isColorAvailableInSystem(color.hex, selectedColorSystem)
+      )),
+      customSelections: customPaletteSelections,
+      useCustomPalette: isCustomPalette,
+      excludedColorKeys,
     });
     // 不进行色号系统转换，保持原始的MARD色号和hex值
     setActiveBeadPalette(newActiveBeadPalette);
-  }, [customPaletteSelections, excludedColorKeys, remapTrigger, selectedColorSystem]);
+  }, [customPaletteSelections, excludedColorKeys, isCustomPalette, remapTrigger, selectedColorSystem]);
 
   // --- Event Handlers ---
 
@@ -2304,16 +2320,17 @@ export default function Home() {
   // 处理自定义色板中单个颜色的选择变化
   const handleSelectionChange = (hexValue: string, isSelected: boolean) => {
     const normalizedHex = hexValue.toUpperCase();
-    setCustomPaletteSelections(prev => ({
+    setCustomPaletteDraftSelections(prev => ({
       ...prev,
       [normalizedHex]: isSelected
     }));
-    setIsCustomPalette(true);
   };
 
   // 保存自定义色板并应用
   const handleSaveCustomPalette = () => {
-    savePaletteSelections(customPaletteSelections);
+    setCustomPaletteSelections(customPaletteDraftSelections);
+    savePaletteSelections(customPaletteDraftSelections);
+    savePaletteMode(true);
     setIsCustomPalette(true);
     setIsCustomPaletteEditorOpen(false);
     // 触发图像重新处理
@@ -2324,9 +2341,15 @@ export default function Home() {
     setIsEraseMode(false);
   };
 
+  const handleColorSystemChange = (colorSystem: ColorSystem) => {
+    setSelectedColorSystem(colorSystem);
+    setIsCustomPalette(false);
+    savePaletteMode(false);
+  };
+
   // ++ 新增：导出自定义色板配置 ++
   const handleExportCustomPalette = () => {
-    const selectedHexValues = Object.entries(customPaletteSelections)
+    const selectedHexValues = Object.entries(customPaletteDraftSelections)
       .filter(([, isSelected]) => isSelected)
       .map(([hexValue]) => hexValue);
 
@@ -2403,6 +2426,9 @@ export default function Home() {
         const allHexValues = fullBeadPalette.map(color => color.hex.toUpperCase());
         const newSelections = presetToSelections(allHexValues, validHexValues);
         setCustomPaletteSelections(newSelections);
+        setCustomPaletteDraftSelections(newSelections);
+        savePaletteSelections(newSelections);
+        savePaletteMode(true);
         setIsCustomPalette(true); // 标记为自定义
         alert(`成功导入 ${validHexValues.length} 个颜色！`);
 
@@ -2567,18 +2593,21 @@ export default function Home() {
   );
 
   const selectedPaletteColorCount = useMemo(
-    () => paletteColorsForSelectedSystem.filter(
-      color => customPaletteSelections[color.hex.toUpperCase()]
-    ).length,
-    [customPaletteSelections, paletteColorsForSelectedSystem]
+    () => isCustomPalette
+      ? paletteColorsForSelectedSystem.filter(
+          color => customPaletteSelections[color.hex.toUpperCase()]
+        ).length
+      : paletteColorsForSelectedSystem.length,
+    [customPaletteSelections, isCustomPalette, paletteColorsForSelectedSystem]
   );
 
   // 生成完整色板数据（用户自定义色板中选中的所有颜色）
   const fullPaletteColors = useMemo(() => {
     const selectedColors: { key: string; color: string }[] = [];
     
-    Object.entries(customPaletteSelections).forEach(([hexValue, isSelected]) => {
-      if (isSelected && isColorAvailableInSystem(hexValue, selectedColorSystem)) {
+    paletteColorsForSelectedSystem.forEach((paletteColor) => {
+      const hexValue = paletteColor.hex.toUpperCase();
+      if ((!isCustomPalette || customPaletteSelections[hexValue]) && isColorAvailableInSystem(hexValue, selectedColorSystem)) {
         // 根据选择的色号系统获取显示的色号
         const displayKey = getColorKeyByHex(hexValue, selectedColorSystem);
         selectedColors.push({
@@ -2590,7 +2619,7 @@ export default function Home() {
     
     // 使用色相排序而不是色号排序
     return sortColorsByHue(selectedColors);
-  }, [customPaletteSelections, selectedColorSystem]);
+  }, [customPaletteSelections, isCustomPalette, paletteColorsForSelectedSystem, selectedColorSystem]);
 
   return (
     <>
@@ -2821,7 +2850,7 @@ export default function Home() {
                   <div className="p-4 sm:p-6 flex-1 overflow-y-auto"> {/* 让内容区域可滚动 */}
                     <CustomPaletteEditor
                       allColors={paletteColorsForSelectedSystem}
-                      currentSelections={customPaletteSelections}
+                      currentSelections={customPaletteDraftSelections}
                       onSelectionChange={handleSelectionChange}
                       onSaveCustomPalette={handleSaveCustomPalette}
                       onClose={() => setIsCustomPaletteEditorOpen(false)}
@@ -2983,8 +3012,11 @@ export default function Home() {
                   onProcessingToggle={handleProcessingToggle}
                   colorSystems={colorSystemOptions}
                   selectedColorSystem={selectedColorSystem}
-                  onColorSystemChange={setSelectedColorSystem}
-                  onManagePalette={() => setIsCustomPaletteEditorOpen(true)}
+                  onColorSystemChange={handleColorSystemChange}
+                  onManagePalette={() => {
+                    setCustomPaletteDraftSelections({ ...customPaletteSelections });
+                    setIsCustomPaletteEditorOpen(true);
+                  }}
                   selectedPaletteColorCount={selectedPaletteColorCount}
                   isCustomPalette={isCustomPalette}
                   granularity={granularity}

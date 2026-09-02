@@ -1,4 +1,5 @@
 const STORAGE_KEY = 'customPerlerPaletteSelections';
+const PALETTE_MODE_STORAGE_KEY = 'customPerlerPaletteMode';
 
 export interface PaletteSelections {
   [hexValue: string]: boolean;
@@ -29,6 +30,27 @@ export function loadPaletteSelections(): PaletteSelections | null {
     localStorage.removeItem(STORAGE_KEY); // 清除无效数据
   }
   return null;
+}
+
+/**
+ * 自定义色板是否明确启用。旧版只保存了选择项，没有保存模式；这种历史数据
+ * 默认按草稿处理，避免页面显示品牌全色、实际却使用不完整色板。
+ */
+export function loadPaletteMode(): boolean {
+  try {
+    return localStorage.getItem(PALETTE_MODE_STORAGE_KEY) === 'custom';
+  } catch (error) {
+    console.error("无法从本地存储加载色板模式:", error);
+    return false;
+  }
+}
+
+export function savePaletteMode(useCustomPalette: boolean): void {
+  try {
+    localStorage.setItem(PALETTE_MODE_STORAGE_KEY, useCustomPalette ? 'custom' : 'standard');
+  } catch (error) {
+    console.error("无法保存色板模式到本地存储:", error);
+  }
 }
 
 /**
@@ -76,4 +98,4 @@ export function presetKeysToHexSelections(
   console.log(`presetKeysToHexSelections: 生成选择对象，总数 ${Object.keys(selections).length}, 选中 ${selectedCount}`);
   
   return selections;
-} 
+}
