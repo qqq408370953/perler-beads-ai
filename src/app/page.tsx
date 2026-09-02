@@ -15,6 +15,10 @@ import {
   colorDistance,
   findClosestPaletteColor
 } from '../utils/pixelation';
+import {
+  preparePatternColors,
+  removeIsolatedColorNoise,
+} from '../utils/patternColorProcessing';
 
 // 导入新的类型和组件
 import { GridDownloadOptions } from '../types/downloadTypes';
@@ -1125,180 +1129,43 @@ export default function Home() {
       );
       console.log(`Initial data mapping complete using mode ${mode}. Starting global color merging...`);
 
-      // --- 新的全局颜色合并逻辑 ---
-      const keyToRgbMap = new Map<string, RgbColor>();
-      const keyToColorDataMap = new Map<string, PaletteColor>();
-      currentPalette.forEach(p => {
-        keyToRgbMap.set(p.key, p.rgb);
-        keyToColorDataMap.set(p.key, p);
-      });
-
-      // 2. 统计初始颜色数量
-      const initialColorCounts: { [key: string]: number } = {};
-      initialMappedData.flat().forEach(cell => {
-          if (cell && cell.key && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
-              initialColorCounts[cell.key] = (initialColorCounts[cell.key] || 0) + 1;
-          }
-      });
-      console.log("Initial color counts:", initialColorCounts);
-
-      // 3. 创建一个颜色排序列表，按出现频率从高到低排序
-      const colorsByFrequency = Object.entries(initialColorCounts)
-          .sort((a, b) => b[1] - a[1])  // 按频率降序排序
-          .map(entry => entry[0]);      // 只保留颜色键
-      
-      if (colorsByFrequency.length === 0) {
-          console.log("No non-background colors found! Skipping merging.");
-      }
-
-      console.log("Colors sorted by frequency:", colorsByFrequency);
-      
-      // 4. 复制初始数据，准备合并
-      const mergedData: MappedPixel[][] = initialMappedData.map(row => 
-          row.map(cell => ({ ...cell, isExternal: cell.isExternal ?? false }))
+      const limitedData = preparePatternColors(
+        initialMappedData,
+        { N, M },
+        currentPalette,
+        {
+          similarityThreshold: threshold,
+          maxColorCount: finalMaxColorCount,
+        },
       );
-      
-      // 5. 处理相似颜色合并
-      const similarityThresholdValue = threshold;
-      
-      // 已被合并（替换）的颜色集合
-      const replacedColors = new Set<string>();
-      
-      // 对每个颜色按频率从高到低处理
-      for (let i = 0; i < colorsByFrequency.length; i++) {
-          const currentKey = colorsByFrequency[i];
-          
-          // 如果当前颜色已经被合并到更频繁的颜色中，跳过
-          if (replacedColors.has(currentKey)) continue;
-          
-          const currentRgb = keyToRgbMap.get(currentKey);
-          if (!currentRgb) {
-              console.warn(`RGB not found for key ${currentKey}. Skipping.`);
-              continue;
-          }
-          
-          // 检查剩余的低频颜色
-          for (let j = i + 1; j < colorsByFrequency.length; j++) {
-              const lowerFreqKey = colorsByFrequency[j];
-              
-              // 如果低频颜色已被替换，跳过
-              if (replacedColors.has(lowerFreqKey)) continue;
-              
-              const lowerFreqRgb = keyToRgbMap.get(lowerFreqKey);
-              if (!lowerFreqRgb) {
-                  console.warn(`RGB not found for key ${lowerFreqKey}. Skipping.`);
-                  continue;
-              }
-              
-              // 计算颜色距离
-              const dist = colorDistance(currentRgb, lowerFreqRgb);
-              
-              // 如果距离小于阈值，将低频颜色替换为高频颜色
-              if (dist < similarityThresholdValue) {
-                  console.log(`Merging color ${lowerFreqKey} into ${currentKey} (Distance: ${dist.toFixed(2)})`);
-                  
-                  // 标记这个颜色已被替换
-                  replacedColors.add(lowerFreqKey);
-                  
-                  // 替换所有使用这个低频颜色的单元格
-                  for (let r = 0; r < M; r++) {
-                      for (let c = 0; c < N; c++) {
-                          if (mergedData[r][c].key === lowerFreqKey) {
-                              const colorData = keyToColorDataMap.get(currentKey);
-                              if (colorData) {
-                                  mergedData[r][c] = {
-                                      key: currentKey,
-                                      color: colorData.hex,
-                                      isExternal: false
-                                  };
-                              }
-                          }
-                      }
-                  }
-              }
-          }
-      }
-      
-      if (replacedColors.size > 0) {
-          console.log(`Merged ${replacedColors.size} less frequent similar colors into more frequent ones.`);
-      } else {
-          console.log("No colors were similar enough to merge.");
-      }
-      // --- 结束新的全局颜色合并逻辑 ---
-
-      const limitedData: MappedPixel[][] = mergedData.map(row => row.map(cell => ({ ...cell })));
-
-      if (finalMaxColorCount > 0) {
-        const mergedColorCounts: { [key: string]: number } = {};
-        limitedData.flat().forEach(cell => {
-          if (cell && cell.key && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
-            mergedColorCounts[cell.key] = (mergedColorCounts[cell.key] || 0) + 1;
-          }
-        });
-
-        const colorsAfterMerge = Object.entries(mergedColorCounts)
-          .sort((a, b) => b[1] - a[1])
-          .map(([key]) => key);
-
-        if (colorsAfterMerge.length > finalMaxColorCount) {
-          const keptColorKeys = colorsAfterMerge.slice(0, finalMaxColorCount);
-          const keptColorSet = new Set(keptColorKeys);
-          let remappedForLimit = 0;
-
-          for (let r = 0; r < M; r++) {
-            for (let c = 0; c < N; c++) {
-              const cell = limitedData[r][c];
-              if (!cell || cell.isExternal || cell.key === TRANSPARENT_KEY || keptColorSet.has(cell.key)) {
-                continue;
-              }
-
-              const sourceRgb = keyToRgbMap.get(cell.key);
-              if (!sourceRgb) continue;
-
-              let closestKey = keptColorKeys[0];
-              let minDistance = Infinity;
-
-              keptColorKeys.forEach(keptKey => {
-                const keptRgb = keyToRgbMap.get(keptKey);
-                if (!keptRgb) return;
-                const distance = colorDistance(sourceRgb, keptRgb);
-                if (distance < minDistance) {
-                  minDistance = distance;
-                  closestKey = keptKey;
-                }
-              });
-
-              const closestColorData = keyToColorDataMap.get(closestKey);
-              if (closestColorData) {
-                limitedData[r][c] = {
-                  key: closestKey,
-                  color: closestColorData.hex,
-                  isExternal: false
-                };
-                remappedForLimit++;
-              }
-            }
-          }
-
-          console.log(`Limited final colors from ${colorsAfterMerge.length} to ${finalMaxColorCount}. Remapped ${remappedForLimit} cells.`);
-        } else {
-          console.log(`Final color count ${colorsAfterMerge.length} is within limit ${finalMaxColorCount}.`);
-        }
-      }
 
       let processedData = limitedData.map(row => row.map(cell => ({ ...cell })));
       let subjectSeparatedData: MappedPixel[][] | null = null;
 
       if (processing.removeBackground || processing.outline) {
-        subjectSeparatedData = await removeBackgroundFromPixelData(
+        const backgroundRemovedData = await removeBackgroundFromPixelData(
           limitedData,
           { N, M },
           { silent: true }
         );
+        // 先完成主体分割，再去除主体内部的孤立杂色，避免把轮廓边缘误当噪点。
+        subjectSeparatedData = backgroundRemovedData
+          ? removeIsolatedColorNoise(
+            backgroundRemovedData,
+            { N, M },
+            currentPalette,
+          )
+          : null;
       }
 
       if (processing.removeBackground && subjectSeparatedData) {
         processedData = subjectSeparatedData.map(row => row.map(cell => ({ ...cell })));
+      } else {
+        processedData = removeIsolatedColorNoise(
+          limitedData,
+          { N, M },
+          currentPalette,
+        );
       }
 
       if (processing.outline && subjectSeparatedData) {

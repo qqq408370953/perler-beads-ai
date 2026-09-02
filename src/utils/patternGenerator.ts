@@ -8,6 +8,10 @@ import {
   RgbColor,
 } from './pixelation';
 import {
+  preparePatternColors,
+  removeIsolatedColorNoise,
+} from './patternColorProcessing';
+import {
   ColorSystem,
   getMardToHexMapping,
   isColorAvailableInSystem,
@@ -120,140 +124,6 @@ export function calculatePatternStats(pixelData: MappedPixel[][]): {
     totalBeadCount,
     colorCount: Object.keys(colorCounts).length,
   };
-}
-
-function mergeSimilarColors(
-  initialData: MappedPixel[][],
-  dimensions: { N: number; M: number },
-  palette: PaletteColor[],
-  threshold: number
-): MappedPixel[][] {
-  const { N, M } = dimensions;
-  const keyToRgbMap = new Map<string, RgbColor>();
-  const keyToColorDataMap = new Map<string, PaletteColor>();
-  palette.forEach((color) => {
-    keyToRgbMap.set(color.key, color.rgb);
-    keyToColorDataMap.set(color.key, color);
-  });
-
-  const initialColorCounts: { [key: string]: number } = {};
-  initialData.flat().forEach((cell) => {
-    if (cell && cell.key && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
-      initialColorCounts[cell.key] = (initialColorCounts[cell.key] || 0) + 1;
-    }
-  });
-
-  const colorsByFrequency = Object.entries(initialColorCounts)
-    .sort((a, b) => b[1] - a[1])
-    .map(([key]) => key);
-  const mergedData = clonePixelData(initialData);
-  const replacedColors = new Set<string>();
-
-  for (let i = 0; i < colorsByFrequency.length; i++) {
-    const currentKey = colorsByFrequency[i];
-    if (replacedColors.has(currentKey)) continue;
-
-    const currentRgb = keyToRgbMap.get(currentKey);
-    if (!currentRgb) continue;
-
-    for (let j = i + 1; j < colorsByFrequency.length; j++) {
-      const lowerFreqKey = colorsByFrequency[j];
-      if (replacedColors.has(lowerFreqKey)) continue;
-
-      const lowerFreqRgb = keyToRgbMap.get(lowerFreqKey);
-      if (!lowerFreqRgb) continue;
-
-      if (colorDistance(currentRgb, lowerFreqRgb) >= threshold) continue;
-
-      replacedColors.add(lowerFreqKey);
-      const colorData = keyToColorDataMap.get(currentKey);
-      if (!colorData) continue;
-
-      for (let row = 0; row < M; row++) {
-        for (let col = 0; col < N; col++) {
-          if (mergedData[row][col].key === lowerFreqKey) {
-            mergedData[row][col] = {
-              key: currentKey,
-              color: colorData.hex,
-              isExternal: false,
-            };
-          }
-        }
-      }
-    }
-  }
-
-  return mergedData;
-}
-
-function limitColorCount(
-  sourceData: MappedPixel[][],
-  dimensions: { N: number; M: number },
-  palette: PaletteColor[],
-  maxColorCount: number
-): MappedPixel[][] {
-  if (maxColorCount <= 0) return clonePixelData(sourceData);
-
-  const { N, M } = dimensions;
-  const limitedData = clonePixelData(sourceData);
-  const keyToRgbMap = new Map<string, RgbColor>();
-  const keyToColorDataMap = new Map<string, PaletteColor>();
-  palette.forEach((color) => {
-    keyToRgbMap.set(color.key, color.rgb);
-    keyToColorDataMap.set(color.key, color);
-  });
-
-  const colorCounts: { [key: string]: number } = {};
-  limitedData.flat().forEach((cell) => {
-    if (cell && cell.key && !cell.isExternal && cell.key !== TRANSPARENT_KEY) {
-      colorCounts[cell.key] = (colorCounts[cell.key] || 0) + 1;
-    }
-  });
-
-  const colorsByFrequency = Object.entries(colorCounts)
-    .sort((a, b) => b[1] - a[1])
-    .map(([key]) => key);
-
-  if (colorsByFrequency.length <= maxColorCount) return limitedData;
-
-  const keptColorKeys = colorsByFrequency.slice(0, maxColorCount);
-  const keptColorSet = new Set(keptColorKeys);
-
-  for (let row = 0; row < M; row++) {
-    for (let col = 0; col < N; col++) {
-      const cell = limitedData[row][col];
-      if (!cell || cell.isExternal || cell.key === TRANSPARENT_KEY || keptColorSet.has(cell.key)) {
-        continue;
-      }
-
-      const sourceRgb = keyToRgbMap.get(cell.key);
-      if (!sourceRgb) continue;
-
-      let closestKey = keptColorKeys[0];
-      let minDistance = Infinity;
-
-      keptColorKeys.forEach((keptKey) => {
-        const keptRgb = keyToRgbMap.get(keptKey);
-        if (!keptRgb) return;
-        const distance = colorDistance(sourceRgb, keptRgb);
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestKey = keptKey;
-        }
-      });
-
-      const colorData = keyToColorDataMap.get(closestKey);
-      if (colorData) {
-        limitedData[row][col] = {
-          key: closestKey,
-          color: colorData.hex,
-          isExternal: false,
-        };
-      }
-    }
-  }
-
-  return limitedData;
 }
 
 async function calculateSubjectMaskGridFromImage(
@@ -509,13 +379,16 @@ export async function generatePatternFromImage(
     options.pixelationMode,
     fallbackColor
   );
-  const mergedData = mergeSimilarColors(initialData, dimensions, palette, options.similarityThreshold);
-  const limitedData = limitColorCount(mergedData, dimensions, palette, options.maxColorCount);
+  const limitedData = preparePatternColors(initialData, dimensions, palette, {
+    similarityThreshold: options.similarityThreshold,
+    maxColorCount: options.maxColorCount,
+  });
   const backgroundRemovedData = await removeBackgroundFromPixelData(limitedData, dimensions, imageSrc);
+  const denoisedData = removeIsolatedColorNoise(backgroundRemovedData, dimensions, palette);
   const {
     mappedPixelData: finalData,
     gridDimensions: croppedDimensions,
-  } = cropPixelDataToContent(backgroundRemovedData, 1);
+  } = cropPixelDataToContent(denoisedData, 1);
   const stats = calculatePatternStats(finalData);
 
   return {

@@ -1,4 +1,8 @@
 import { transparentColorData } from './pixelEditingUtils';
+import {
+  calculateQuantizedDominantColor,
+  findClosestPerceptualPaletteColor,
+} from './patternColorProcessing';
 
 // 定义像素化模式
 export enum PixelationMode {
@@ -59,18 +63,7 @@ export function findClosestPaletteColor(
       return { key: 'ERR', hex: '#000000', rgb: { r: 0, g: 0, b: 0 } };
   }
 
-  let minDistance = Infinity;
-  let closestColor = palette[0];
-
-  for (const paletteColor of palette) {
-    const distance = colorDistance(targetRgb, paletteColor.rgb);
-    if (distance < minDistance) {
-      minDistance = distance;
-      closestColor = paletteColor;
-    }
-    if (distance === 0) break; // 完全匹配，提前退出
-  }
-  return closestColor;
+  return findClosestPerceptualPaletteColor(targetRgb, palette);
 }
 
 
@@ -98,12 +91,19 @@ function calculateCellRepresentativeColor(
     const imgWidth = imageData.width;
     let rSum = 0, gSum = 0, bSum = 0;
     let pixelCount = 0;
-    const colorCountsInCell: { [key: string]: number } = {};
-    let dominantColorRgb: RgbColor | null = null;
-    let maxCount = 0;
-
     const endX = startX + width;
     const endY = startY + height;
+
+    if (mode === PixelationMode.Dominant) {
+        return calculateQuantizedDominantColor(
+            data,
+            imgWidth,
+            startX,
+            startY,
+            endX,
+            endY
+        );
+    }
 
     for (let y = startY; y < endY; y++) {
         for (let x = startX; x < endX; x++) {
@@ -117,18 +117,9 @@ function calculateCellRepresentativeColor(
 
             pixelCount++;
 
-            if (mode === PixelationMode.Average) {
-                rSum += r;
-                gSum += g;
-                bSum += b;
-            } else { // Dominant mode
-                const colorKey = `${r},${g},${b}`;
-                colorCountsInCell[colorKey] = (colorCountsInCell[colorKey] || 0) + 1;
-                if (colorCountsInCell[colorKey] > maxCount) {
-                    maxCount = colorCountsInCell[colorKey];
-                    dominantColorRgb = { r, g, b };
-                }
-            }
+            rSum += r;
+            gSum += g;
+            bSum += b;
         }
     }
 
@@ -136,15 +127,11 @@ function calculateCellRepresentativeColor(
         return null; // 区域内没有不透明像素
     }
 
-    if (mode === PixelationMode.Average) {
-        return {
-            r: Math.round(rSum / pixelCount),
-            g: Math.round(gSum / pixelCount),
-            b: Math.round(bSum / pixelCount),
-        };
-    } else { // Dominant mode
-        return dominantColorRgb; // 可能为 null 如果只有一个透明像素
-    }
+    return {
+        r: Math.round(rSum / pixelCount),
+        g: Math.round(gSum / pixelCount),
+        b: Math.round(bSum / pixelCount),
+    };
 }
 
 /**
