@@ -109,7 +109,8 @@ export default function FocusMode() {
     showCellNumbers: true,
     gridLineColor: '#555555',
     includeStats: true,
-    exportCsv: false
+    exportCsv: false,
+    includeSocialPreview: false,
   });
 
   // 计时器管理

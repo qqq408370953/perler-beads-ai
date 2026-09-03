@@ -2,6 +2,13 @@ import { GridDownloadOptions } from '../types/downloadTypes';
 import { MappedPixel, PaletteColor } from './pixelation';
 import { getMappedColorDisplayKey, getColorKeyByHex, ColorSystem } from './colorSystemUtils';
 import { cropPixelDataToContent, TRANSPARENT_KEY } from './pixelEditingUtils';
+import {
+  calculateSocialPreviewCellSize,
+  calculateSocialPreviewStatsLayout,
+  getSocialPreviewCrossSegments,
+  getSocialPreviewGridLineStyles,
+  isSocialPreviewBackgroundCell,
+} from './socialPreviewImage';
 
 // 用于获取对比色的工具函数 - 从page.tsx复制
 function getContrastColor(hex: string): string {
@@ -291,7 +298,7 @@ export async function generateDownloadImagePreview({
   options,
   activeBeadPalette,
   selectedColorSystem
-}: DownloadImageParams): Promise<DownloadImagePreviewResult | null> {
+}: DownloadImageParams, variant: 'high-resolution' | 'social-preview' = 'high-resolution'): Promise<DownloadImagePreviewResult | null> {
   if (!mappedPixelData || !gridDimensions || gridDimensions.N === 0 || gridDimensions.M === 0 || activeBeadPalette.length === 0) {
     console.error('下载失败: 映射数据或尺寸无效。');
     alert('无法生成图纸，数据未生成或无效。');
@@ -304,7 +311,11 @@ export async function generateDownloadImagePreview({
   }
 
   const { N, M } = gridDimensions;
-  const cellSize = getDownloadCellSize(N, M);
+  const isSocialPreview = variant === 'social-preview';
+  const socialGridLineStyles = getSocialPreviewGridLineStyles();
+  const cellSize = isSocialPreview
+    ? calculateSocialPreviewCellSize({ N, M })
+    : getDownloadCellSize(N, M);
   const {
     showGrid,
     gridInterval,
@@ -320,10 +331,20 @@ export async function generateDownloadImagePreview({
   const gridHeight = M * cellSize;
   const sheetWidth = pagePadding * 2 + coordinateBand * 2 + gridWidth;
   const colorKeys = Object.keys(colorCounts).sort(sortColorKeys);
-  const statsGap = includeStats && colorKeys.length > 0 ? 28 : 0;
-  const statsColumns = Math.max(1, Math.min(10, Math.floor((sheetWidth - pagePadding * 2) / 120)));
-  const statsRows = Math.ceil(colorKeys.length / statsColumns);
-  const statsHeight = includeStats && colorKeys.length > 0 ? 54 + statsRows * 68 + 34 : 0;
+  const availableStatsWidth = sheetWidth - pagePadding * 2;
+  const socialStatsLayout = calculateSocialPreviewStatsLayout(colorKeys.length, availableStatsWidth);
+  const statsGap = includeStats && colorKeys.length > 0 ? (isSocialPreview ? 18 : 28) : 0;
+  const statsColumns = isSocialPreview
+    ? socialStatsLayout.columns
+    : Math.max(1, Math.min(10, Math.floor(availableStatsWidth / 120)));
+  const statsRows = isSocialPreview
+    ? socialStatsLayout.rows
+    : Math.ceil(colorKeys.length / statsColumns);
+  const statsHeight = includeStats && colorKeys.length > 0
+    ? isSocialPreview
+      ? socialStatsLayout.height
+      : 54 + statsRows * 68 + 34
+    : 0;
   const sheetHeight = pagePadding * 2 + headerHeight + coordinateBand * 2 + gridHeight + statsGap + statsHeight;
   const canvas = document.createElement('canvas');
   canvas.width = sheetWidth;
@@ -335,11 +356,13 @@ export async function generateDownloadImagePreview({
     return null;
   }
 
-  const sheetColor = '#FFFEF8';
-  const emptyCellColor = '#FFFCEE';
-  const minorLineColor = '#8D8980';
-  const outerLineColor = '#55524C';
-  const majorLineColor = gridLineColor || outerLineColor;
+  const sheetColor = isSocialPreview ? '#FBFAF5' : '#FFFEF8';
+  const emptyCellColor = isSocialPreview ? '#FAF9F4' : '#FFFCEE';
+  const minorLineColor = isSocialPreview ? socialGridLineStyles.minor.color : '#8D8980';
+  const outerLineColor = isSocialPreview ? '#777168' : '#55524C';
+  const majorLineColor = isSocialPreview
+    ? socialGridLineStyles.major.color
+    : gridLineColor || outerLineColor;
   const originX = pagePadding + coordinateBand;
   const originY = pagePadding + headerHeight + coordinateBand;
   const gridBottom = originY + gridHeight;
@@ -350,7 +373,9 @@ export async function generateDownloadImagePreview({
 
   const headerTitle = `拼豆图纸生成器 / ${selectedColorSystem}`;
   const headerMeta = `${N}×${M} · ${colorKeys.length} 色 · ${totalBeadCount} 颗`;
-  const headerFontSize = Math.max(9, Math.min(15, Math.floor(sheetWidth / 72)));
+  const headerFontSize = isSocialPreview
+    ? Math.max(8, Math.min(12, Math.floor(sheetWidth / 92)))
+    : Math.max(9, Math.min(15, Math.floor(sheetWidth / 72)));
   ctx.fillStyle = '#4B4741';
   ctx.font = `700 ${headerFontSize}px sans-serif`;
   ctx.textAlign = 'left';
@@ -367,8 +392,10 @@ export async function generateDownloadImagePreview({
   }
 
   if (showCoordinates) {
-    const axisFontSize = Math.max(6, Math.min(10, Math.floor(cellSize * 0.34)));
-    ctx.fillStyle = '#5F5B54';
+    const axisFontSize = isSocialPreview
+      ? Math.max(4, Math.min(7, Math.floor(cellSize * 0.3)))
+      : Math.max(6, Math.min(10, Math.floor(cellSize * 0.34)));
+    ctx.fillStyle = isSocialPreview ? '#77736C' : '#5F5B54';
     ctx.font = `500 ${axisFontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -388,79 +415,137 @@ export async function generateDownloadImagePreview({
     }
   }
 
-  const cellFontSize = Math.max(5, Math.min(10, Math.floor(cellSize * 0.34)));
-  ctx.font = `500 ${cellFontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
+  const cellFontSize = isSocialPreview
+    ? Math.max(3, Math.min(8, Math.floor(cellSize * 0.3)))
+    : Math.max(5, Math.min(10, Math.floor(cellSize * 0.34)));
+  const cellLabelFont = `500 ${cellFontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
+  const backgroundCrossSegments = isSocialPreview ? getSocialPreviewCrossSegments(cellSize) : [];
+  ctx.font = cellLabelFont;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  if (isSocialPreview) ctx.beginPath();
 
   for (let row = 0; row < M; row++) {
     for (let col = 0; col < N; col++) {
       const cell = mappedPixelData[row]?.[col];
       const drawX = originX + col * cellSize;
       const drawY = originY + row * cellSize;
-      const isEmpty = !cell || cell.isExternal || cell.key === TRANSPARENT_KEY;
+      const isEmpty = isSocialPreview
+        ? isSocialPreviewBackgroundCell(cell)
+        : !cell || cell.isExternal || cell.key === TRANSPARENT_KEY;
       const cellColor = isEmpty ? emptyCellColor : cell.color || '#FFFFFF';
 
       ctx.fillStyle = cellColor;
       ctx.fillRect(drawX, drawY, cellSize, cellSize);
 
-      if (!isEmpty && showCellNumbers) {
-        ctx.fillStyle = getContrastColor(cellColor);
+      if (isSocialPreview && isEmpty) {
+        backgroundCrossSegments.forEach(([startX, startY, endX, endY]) => {
+          ctx.moveTo(drawX + startX, drawY + startY);
+          ctx.lineTo(drawX + endX, drawY + endY);
+        });
+      } else if (!isEmpty && showCellNumbers && cellSize >= 5) {
+        const labelColor = getContrastColor(cellColor);
+        ctx.fillStyle = labelColor;
+        ctx.font = cellLabelFont;
+        ctx.globalAlpha = isSocialPreview
+          ? labelColor === '#FFFFFF' ? 0.56 : 0.72
+          : 1;
         ctx.fillText(
           getMappedColorDisplayKey(cellColor, selectedColorSystem, cell!.key),
           drawX + cellSize / 2,
           drawY + cellSize / 2
         );
+        ctx.globalAlpha = 1;
       }
     }
   }
 
+  if (isSocialPreview) {
+    ctx.strokeStyle = 'rgba(105, 101, 94, 0.34)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
   // Use integer line widths and pixel-aligned coordinates. Fractional strokes
   // such as 0.75 px are anti-aliased by Canvas and look blurred when zoomed.
-  ctx.strokeStyle = minorLineColor;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let col = 1; col < N; col++) {
-    const lineX = originX + col * cellSize + 0.5;
-    ctx.moveTo(lineX, originY);
-    ctx.lineTo(lineX, gridBottom);
-  }
-  for (let row = 1; row < M; row++) {
-    const lineY = originY + row * cellSize + 0.5;
-    ctx.moveTo(originX, lineY);
-    ctx.lineTo(originX + gridWidth, lineY);
-  }
-  ctx.stroke();
-
-  if (showGrid) {
-    ctx.strokeStyle = majorLineColor;
-    ctx.lineWidth = 2;
+  if (isSocialPreview) {
+    ctx.fillStyle = minorLineColor;
+    for (let col = 1; col < N; col++) {
+      ctx.fillRect(originX + col * cellSize, originY, socialGridLineStyles.minor.width, gridHeight);
+    }
+    for (let row = 1; row < M; row++) {
+      ctx.fillRect(originX, originY + row * cellSize, gridWidth, socialGridLineStyles.minor.width);
+    }
+  } else {
+    ctx.strokeStyle = minorLineColor;
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let col = Math.max(1, gridInterval); col < N; col += Math.max(1, gridInterval)) {
-      const lineX = originX + col * cellSize;
+    for (let col = 1; col < N; col++) {
+      const lineX = originX + col * cellSize + 0.5;
       ctx.moveTo(lineX, originY);
       ctx.lineTo(lineX, gridBottom);
     }
-    for (let row = Math.max(1, gridInterval); row < M; row += Math.max(1, gridInterval)) {
-      const lineY = originY + row * cellSize;
+    for (let row = 1; row < M; row++) {
+      const lineY = originY + row * cellSize + 0.5;
       ctx.moveTo(originX, lineY);
       ctx.lineTo(originX + gridWidth, lineY);
     }
     ctx.stroke();
   }
 
-  ctx.strokeStyle = outerLineColor;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(originX, originY, gridWidth, gridHeight);
+  if (showGrid) {
+    if (isSocialPreview) {
+      ctx.fillStyle = majorLineColor;
+      for (let col = Math.max(1, gridInterval); col < N; col += Math.max(1, gridInterval)) {
+        ctx.fillRect(originX + col * cellSize, originY, socialGridLineStyles.major.width, gridHeight);
+      }
+      for (let row = Math.max(1, gridInterval); row < M; row += Math.max(1, gridInterval)) {
+        ctx.fillRect(originX, originY + row * cellSize, gridWidth, socialGridLineStyles.major.width);
+      }
+    } else {
+      ctx.strokeStyle = majorLineColor;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let col = Math.max(1, gridInterval); col < N; col += Math.max(1, gridInterval)) {
+        const lineX = originX + col * cellSize;
+        ctx.moveTo(lineX, originY);
+        ctx.lineTo(lineX, gridBottom);
+      }
+      for (let row = Math.max(1, gridInterval); row < M; row += Math.max(1, gridInterval)) {
+        const lineY = originY + row * cellSize;
+        ctx.moveTo(originX, lineY);
+        ctx.lineTo(originX + gridWidth, lineY);
+      }
+      ctx.stroke();
+    }
+  }
+
+  if (isSocialPreview) {
+    ctx.fillStyle = outerLineColor;
+    ctx.fillRect(originX, originY, gridWidth, 1);
+    ctx.fillRect(originX, gridBottom - 1, gridWidth, 1);
+    ctx.fillRect(originX, originY, 1, gridHeight);
+    ctx.fillRect(originX + gridWidth - 1, originY, 1, gridHeight);
+  } else {
+    ctx.strokeStyle = outerLineColor;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(originX, originY, gridWidth, gridHeight);
+  }
 
   if (includeStats && colorKeys.length > 0) {
     const statsTop = gridBottom + coordinateBand + statsGap;
     const availableWidth = sheetWidth - pagePadding * 2;
     const itemWidth = availableWidth / statsColumns;
-    const swatchWidth = Math.max(42, Math.min(72, itemWidth - 18));
-    const swatchHeight = Math.max(24, Math.min(36, Math.round(cellSize * 1.25)));
+    const statsRowHeight = isSocialPreview ? socialStatsLayout.rowHeight : 68;
+    const statsItemsTop = isSocialPreview ? 34 : 42;
+    const swatchWidth = isSocialPreview
+      ? Math.max(34, Math.min(64, itemWidth - 10))
+      : Math.max(42, Math.min(72, itemWidth - 18));
+    const swatchHeight = isSocialPreview
+      ? 22
+      : Math.max(24, Math.min(36, Math.round(cellSize * 1.25)));
 
-    ctx.strokeStyle = '#DED9CF';
+    ctx.strokeStyle = isSocialPreview ? '#E4E0D7' : '#DED9CF';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(pagePadding, statsTop);
@@ -468,19 +553,23 @@ export async function generateDownloadImagePreview({
     ctx.stroke();
 
     ctx.fillStyle = '#A55B1E';
-    ctx.font = '600 11px sans-serif';
+    ctx.font = `600 ${isSocialPreview ? 9 : 11}px sans-serif`;
     ctx.textAlign = 'left';
-    ctx.fillText('颜色统计', pagePadding, statsTop + 24);
+    ctx.fillText('颜色统计', pagePadding, statsTop + (isSocialPreview ? 18 : 24));
     ctx.fillStyle = '#7A746B';
-    ctx.font = '500 10px sans-serif';
-    ctx.fillText(`${colorKeys.length} 色 · ${totalBeadCount} 颗`, pagePadding + 58, statsTop + 24);
+    ctx.font = `500 ${isSocialPreview ? 8 : 10}px sans-serif`;
+    ctx.fillText(
+      `${colorKeys.length} 色 · ${totalBeadCount} 颗`,
+      pagePadding + (isSocialPreview ? 48 : 58),
+      statsTop + (isSocialPreview ? 18 : 24),
+    );
 
     colorKeys.forEach((key, index) => {
       const row = Math.floor(index / statsColumns);
       const col = index % statsColumns;
       const itemCenterX = pagePadding + col * itemWidth + itemWidth / 2;
       const swatchX = itemCenterX - swatchWidth / 2;
-      const swatchY = statsTop + 42 + row * 68;
+      const swatchY = statsTop + statsItemsTop + row * statsRowHeight;
       const item = colorCounts[key];
       const color = item.color || key;
       const label = item.displayKey ?? getColorKeyByHex(key, selectedColorSystem);
@@ -491,16 +580,16 @@ export async function generateDownloadImagePreview({
       ctx.lineWidth = 0.75;
       ctx.strokeRect(swatchX + 0.5, swatchY + 0.5, swatchWidth - 1, swatchHeight - 1);
       ctx.fillStyle = getContrastColor(color);
-      ctx.font = '600 9px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+      ctx.font = `600 ${isSocialPreview ? 7 : 9}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
       ctx.textAlign = 'center';
       ctx.fillText(label, itemCenterX, swatchY + swatchHeight / 2);
       ctx.fillStyle = '#6F6A62';
-      ctx.font = '500 9px sans-serif';
-      ctx.fillText(`${item.count} 颗`, itemCenterX, swatchY + swatchHeight + 12);
+      ctx.font = `500 ${isSocialPreview ? 7 : 9}px sans-serif`;
+      ctx.fillText(`${item.count} 颗`, itemCenterX, swatchY + swatchHeight + (isSocialPreview ? 9 : 12));
     });
 
     ctx.fillStyle = '#8A847B';
-    ctx.font = '500 9px sans-serif';
+    ctx.font = `500 ${isSocialPreview ? 7 : 9}px sans-serif`;
     ctx.textAlign = 'right';
     ctx.fillText(
       `${selectedColorSystem} · ${N}×${M} · ${colorKeys.length} 色 · ${totalBeadCount} 颗`,
@@ -512,9 +601,11 @@ export async function generateDownloadImagePreview({
   try {
     const blob = await canvasToPngBlob(canvas);
     const imageUrl = URL.createObjectURL(blob);
-    const filename = showCellNumbers
-      ? `bead-grid-${N}x${M}-keys-palette_${selectedColorSystem}.png`
-      : `bead-grid-${N}x${M}-pixel-palette_${selectedColorSystem}.png`;
+    const filename = isSocialPreview
+      ? `bead-grid-${N}x${M}-social-preview-palette_${selectedColorSystem}.png`
+      : showCellNumbers
+        ? `bead-grid-${N}x${M}-keys-palette_${selectedColorSystem}.png`
+        : `bead-grid-${N}x${M}-pixel-palette_${selectedColorSystem}.png`;
 
     // The encoded Blob is independent from the Canvas. Releasing the backing
     // store here avoids keeping a high-resolution canvas and a Base64 copy in
@@ -532,12 +623,23 @@ export async function generateDownloadImagePreview({
 
 // 下载图片的主函数
 export async function downloadImage(params: DownloadImageParams): Promise<void> {
-  const result = await generateDownloadImagePreview(params);
-  if (!result) return;
+  let highResolutionResult = await generateDownloadImagePreview(params);
+  if (!highResolutionResult) return;
+  let socialPreviewResult: DownloadImagePreviewResult | null = null;
 
   try {
-    await saveImageBlob(result.blob, result.filename);
+    await saveImageBlob(highResolutionResult.blob, highResolutionResult.filename);
     console.log("Grid image download initiated.");
+    releaseDownloadImagePreviewUrl(highResolutionResult.imageUrl);
+    highResolutionResult = null;
+
+    if (params.options.includeSocialPreview) {
+      socialPreviewResult = await generateDownloadImagePreview(params, 'social-preview');
+      if (socialPreviewResult) {
+        await saveImageBlob(socialPreviewResult.blob, socialPreviewResult.filename);
+        console.log("Social preview download initiated.");
+      }
+    }
 
     // 如果启用了CSV导出，同时导出CSV文件
     if (params.options.exportCsv) {
@@ -551,6 +653,7 @@ export async function downloadImage(params: DownloadImageParams): Promise<void> 
     console.error("下载图纸失败:", e);
     alert("无法生成图纸下载链接。");
   } finally {
-    releaseDownloadImagePreviewUrl(result.imageUrl);
+    releaseDownloadImagePreviewUrl(highResolutionResult?.imageUrl);
+    releaseDownloadImagePreviewUrl(socialPreviewResult?.imageUrl);
   }
-} 
+}

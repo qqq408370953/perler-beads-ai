@@ -60,6 +60,7 @@ const defaultDownloadOptions: GridDownloadOptions = {
   gridLineColor: '#000000',
   includeStats: true,
   exportCsv: false,
+  includeSocialPreview: false,
 };
 
 function makeItemId() {

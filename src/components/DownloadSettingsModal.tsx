@@ -186,6 +186,26 @@ const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
               </label>
             </div>
 
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-col">
+                <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300">
+                  同时下载自媒体预览图
+                </label>
+                <span className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  抗平台缩放，透明背景格以 × 显示
+                </span>
+              </div>
+              <label className="relative inline-flex shrink-0 cursor-pointer items-center">
+                <input
+                  type="checkbox"
+                  className="peer sr-only"
+                  checked={tempOptions.includeSocialPreview}
+                  onChange={(e) => handleOptionChange('includeSocialPreview', e.target.checked)}
+                />
+                <div className="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none dark:bg-gray-700"></div>
+              </label>
+            </div>
+
             {/* 新增: 导出CSV hex数据选项 */}
             <div className="flex items-center justify-between">
               <div className="flex flex-col">

@@ -7,4 +7,5 @@ export type GridDownloadOptions = {
   gridLineColor: string;
   includeStats: boolean;
   exportCsv: boolean; // 新增：是否同时导出CSV hex数据
+  includeSocialPreview: boolean; // 是否同时导出适合自媒体发布的预览图
 };

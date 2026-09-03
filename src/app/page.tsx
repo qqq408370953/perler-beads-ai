@@ -216,7 +216,8 @@ export default function Home() {
     showCellNumbers: true,
     gridLineColor: gridLineColorOptions[0].value,
     includeStats: true, // 默认包含统计信息
-    exportCsv: false // 默认不导出CSV
+    exportCsv: false, // 默认不导出CSV
+    includeSocialPreview: false,
   });
   const [isPatternPreviewOpen, setIsPatternPreviewOpen] = useState<boolean>(false);
   const [isFullscreenEditorOpen, setIsFullscreenEditorOpen] = useState<boolean>(false);
