@@ -1,0 +1,568 @@
+'use client';
+
+/* eslint-disable @next/next/no-img-element */
+
+import { PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  POSTER_HEIGHT,
+  POSTER_WIDTH,
+  applyPosterTextStyleToAll,
+  constrainPosterTransform,
+  mergePosterLayerTransforms,
+  movePosterLayer,
+  posterFontOptions,
+  posterTextEffectPresets,
+  resolvePosterTextStyle,
+  updatePosterTextStyleOverride,
+  type PosterBaseLayer,
+  type PosterLayerTransform,
+  type PosterTextStyleOverride,
+} from '../utils/posterLayout';
+
+interface PosterFreeLayoutModalProps {
+  isOpen: boolean;
+  layers: PosterBaseLayer[];
+  initialTransforms: PosterLayerTransform[] | null;
+  initialTextStyles: PosterTextStyleOverride[];
+  backgroundStart: string;
+  backgroundEnd: string;
+  useGradientBackground: boolean;
+  onClose: () => void;
+  onApply: (transforms: PosterLayerTransform[], textStyles: PosterTextStyleOverride[]) => void;
+  onReset: () => void;
+}
+
+type GestureMode = 'move' | 'scale' | 'rotate' | 'pinch';
+
+interface GestureState {
+  mode: GestureMode;
+  pointerId: number;
+  layerId: string;
+  startClientX: number;
+  startClientY: number;
+  startTransform: PosterLayerTransform;
+  startDistance?: number;
+  startAngle?: number;
+}
+
+const layerNames: Record<PosterBaseLayer['kind'], string> = {
+  title: '顶部标题',
+  subtitle: '副标题',
+  'item-image': '图片',
+  'item-label': '图片名称',
+  'bottom-title': '底部大标题',
+  'fixed-text': '底部小字',
+};
+
+function distanceToCenter(event: PointerEvent, transform: PosterLayerTransform, rect: DOMRect) {
+  const centerX = rect.left + (transform.x / POSTER_WIDTH) * rect.width;
+  const centerY = rect.top + (transform.y / POSTER_HEIGHT) * rect.height;
+  return Math.max(1, Math.hypot(event.clientX - centerX, event.clientY - centerY));
+}
+
+function angleToCenter(event: PointerEvent, transform: PosterLayerTransform, rect: DOMRect) {
+  const centerX = rect.left + (transform.x / POSTER_WIDTH) * rect.width;
+  const centerY = rect.top + (transform.y / POSTER_HEIGHT) * rect.height;
+  return (Math.atan2(event.clientY - centerY, event.clientX - centerX) * 180) / Math.PI;
+}
+
+function colorInputValue(value: string, fallback: string) {
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+}
+
+export default function PosterFreeLayoutModal({
+  isOpen,
+  layers,
+  initialTransforms,
+  initialTextStyles,
+  backgroundStart,
+  backgroundEnd,
+  useGradientBackground,
+  onClose,
+  onApply,
+  onReset,
+}: PosterFreeLayoutModalProps) {
+  const posterRef = useRef<HTMLDivElement | null>(null);
+  const gestureRef = useRef<GestureState | null>(null);
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const [transforms, setTransforms] = useState<PosterLayerTransform[]>([]);
+  const [textStyles, setTextStyles] = useState<PosterTextStyleOverride[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const initialSnapshotRef = useRef('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const merged = mergePosterLayerTransforms(layers, initialTransforms);
+    setTransforms(merged);
+    setTextStyles(initialTextStyles);
+    setSelectedId(merged[0]?.id ?? null);
+    initialSnapshotRef.current = JSON.stringify({ transforms: merged, textStyles: initialTextStyles });
+  }, [isOpen, layers, initialTransforms, initialTextStyles]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!selectedId || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      if (event.target instanceof HTMLInputElement) return;
+      event.preventDefault();
+      const step = event.shiftKey ? 10 : 2;
+      setTransforms((current) =>
+        current.map((transform) => {
+          if (transform.id !== selectedId) return transform;
+          return constrainPosterTransform({
+            ...transform,
+            x: transform.x + (event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0),
+            y: transform.y + (event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0),
+          });
+        })
+      );
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, selectedId]);
+
+  const resolved = useMemo(() => {
+    const transformById = new Map(transforms.map((transform) => [transform.id, transform]));
+    return layers
+      .map((layer) => ({ layer, transform: transformById.get(layer.id) }))
+      .filter((entry): entry is { layer: PosterBaseLayer; transform: PosterLayerTransform } => Boolean(entry.transform))
+      .sort((a, b) => a.transform.zIndex - b.transform.zIndex);
+  }, [layers, transforms]);
+
+  const selected = transforms.find((transform) => transform.id === selectedId) ?? null;
+  const selectedLayer = layers.find((layer) => layer.id === selectedId) ?? null;
+  const selectedTextStyle = selectedLayer?.textStyle
+    ? resolvePosterTextStyle(selectedLayer, textStyles)
+    : null;
+  const dirty = JSON.stringify({ transforms, textStyles }) !== initialSnapshotRef.current;
+
+  const updateTransform = (id: string, update: (current: PosterLayerTransform) => PosterLayerTransform) => {
+    setTransforms((current) =>
+      current.map((transform) =>
+        transform.id === id ? constrainPosterTransform(update(transform)) : transform
+      )
+    );
+  };
+
+  const updateSelectedTextStyle = (
+    patch: Partial<Omit<PosterTextStyleOverride, 'id'>>
+  ) => {
+    if (!selectedLayer?.textStyle) return;
+    setTextStyles((current) => updatePosterTextStyleOverride(current, selectedLayer, patch));
+  };
+
+  const requestClose = () => {
+    if (dirty && !window.confirm('当前自由布局尚未应用，确定关闭吗？')) return;
+    onClose();
+  };
+
+  const beginGesture = (
+    mode: GestureMode,
+    layerId: string,
+    event: PointerEvent<HTMLElement>
+  ) => {
+    const transform = transforms.find((item) => item.id === layerId);
+    const poster = posterRef.current;
+    if (!transform || !poster) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const rect = poster.getBoundingClientRect();
+    const pointerValues = [...pointersRef.current.values()];
+    if (mode === 'move' && pointerValues.length === 2) {
+      const [first, second] = pointerValues;
+      gestureRef.current = {
+        mode: 'pinch',
+        pointerId: -1,
+        layerId,
+        startClientX: (first.x + second.x) / 2,
+        startClientY: (first.y + second.y) / 2,
+        startTransform: { ...transform },
+        startDistance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
+        startAngle: (Math.atan2(second.y - first.y, second.x - first.x) * 180) / Math.PI,
+      };
+      setSelectedId(layerId);
+      return;
+    }
+    gestureRef.current = {
+      mode,
+      pointerId: event.pointerId,
+      layerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startTransform: { ...transform },
+      startDistance: mode === 'scale' ? distanceToCenter(event, transform, rect) : undefined,
+      startAngle: mode === 'rotate' ? angleToCenter(event, transform, rect) : undefined,
+    };
+    setSelectedId(layerId);
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLElement>) => {
+    const gesture = gestureRef.current;
+    const poster = posterRef.current;
+    if (!gesture || !poster || (gesture.mode !== 'pinch' && gesture.pointerId !== event.pointerId)) return;
+    event.preventDefault();
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const rect = poster.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+
+    if (gesture.mode === 'pinch') {
+      const pointerValues = [...pointersRef.current.values()];
+      if (pointerValues.length < 2) return;
+      const [first, second] = pointerValues;
+      const centerX = (first.x + second.x) / 2;
+      const centerY = (first.y + second.y) / 2;
+      const currentDistance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+      const currentAngle = (Math.atan2(second.y - first.y, second.x - first.x) * 180) / Math.PI;
+      updateTransform(gesture.layerId, () => ({
+        ...gesture.startTransform,
+        x: gesture.startTransform.x + ((centerX - gesture.startClientX) / rect.width) * POSTER_WIDTH,
+        y: gesture.startTransform.y + ((centerY - gesture.startClientY) / rect.height) * POSTER_HEIGHT,
+        scale: gesture.startTransform.scale * (currentDistance / (gesture.startDistance ?? 1)),
+        rotation: gesture.startTransform.rotation + currentAngle - (gesture.startAngle ?? currentAngle),
+      }));
+      return;
+    }
+
+    if (gesture.mode === 'move') {
+      const deltaX = ((event.clientX - gesture.startClientX) / rect.width) * POSTER_WIDTH;
+      const deltaY = ((event.clientY - gesture.startClientY) / rect.height) * POSTER_HEIGHT;
+      updateTransform(gesture.layerId, () => ({
+        ...gesture.startTransform,
+        x: gesture.startTransform.x + deltaX,
+        y: gesture.startTransform.y + deltaY,
+      }));
+      return;
+    }
+
+    if (gesture.mode === 'scale') {
+      const currentDistance = distanceToCenter(event, gesture.startTransform, rect);
+      const startDistance = gesture.startDistance ?? 1;
+      updateTransform(gesture.layerId, () => ({
+        ...gesture.startTransform,
+        scale: gesture.startTransform.scale * (currentDistance / startDistance),
+      }));
+      return;
+    }
+
+    const currentAngle = angleToCenter(event, gesture.startTransform, rect);
+    updateTransform(gesture.layerId, () => ({
+      ...gesture.startTransform,
+      rotation: gesture.startTransform.rotation + currentAngle - (gesture.startAngle ?? currentAngle),
+    }));
+  };
+
+  const endGesture = (event: PointerEvent<HTMLElement>) => {
+    const gesture = gestureRef.current;
+    if (!gesture || (gesture.mode !== 'pinch' && gesture.pointerId !== event.pointerId)) return;
+    gestureRef.current = null;
+    if (gesture.mode === 'pinch') {
+      pointersRef.current.clear();
+    } else {
+      pointersRef.current.delete(event.pointerId);
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const resetLayout = () => {
+    if (!window.confirm('确定恢复自动布局吗？自由调整的位置、大小、旋转和层级将被清除。')) return;
+    const automatic = mergePosterLayerTransforms(layers, null);
+    setTransforms(automatic);
+    setSelectedId(automatic[0]?.id ?? null);
+    onReset();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[80] flex flex-col bg-slate-950" role="dialog" aria-modal="true" aria-labelledby="poster-free-layout-title">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-slate-900 px-3 py-3 text-white sm:px-5">
+        <div>
+          <h2 id="poster-free-layout-title" className="text-base font-black sm:text-lg">自由布局编辑</h2>
+          <p className="text-xs text-slate-400">拖动元素；角落缩放，顶部圆点旋转。支持鼠标与触控。</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={resetLayout} className="min-h-10 rounded-lg border border-white/20 px-3 text-sm font-bold text-slate-200 hover:bg-white/10">恢复自动布局</button>
+          <button type="button" onClick={requestClose} className="grid h-10 w-10 place-items-center rounded-full border border-white/20 text-2xl text-slate-200" aria-label="关闭自由布局">×</button>
+        </div>
+      </header>
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
+        <div className="flex shrink-0 items-center justify-center bg-slate-950 p-3 sm:p-6 lg:min-h-0 lg:flex-1 lg:shrink lg:overflow-auto">
+          <div
+            ref={posterRef}
+            className="relative aspect-[3/4] shrink-0 overflow-hidden shadow-2xl"
+            style={{
+              width: 'min(100%, calc((100dvh - 150px) * 0.75))',
+              containerType: 'inline-size',
+              background: useGradientBackground
+                ? `linear-gradient(90deg, ${backgroundStart}, ${backgroundEnd})`
+                : backgroundStart,
+            }}
+            onPointerDown={() => setSelectedId(null)}
+          >
+            {resolved.map(({ layer, transform }) => {
+              const isSelected = transform.id === selectedId;
+              const textStyle = layer.textStyle
+                ? resolvePosterTextStyle(layer, textStyles)
+                : null;
+              return (
+                <div
+                  key={layer.id}
+                  className={`absolute touch-none select-none ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-transparent' : ''}`}
+                  style={{
+                    left: `${(transform.x / POSTER_WIDTH) * 100}%`,
+                    top: `${(transform.y / POSTER_HEIGHT) * 100}%`,
+                    width: `${(layer.width / POSTER_WIDTH) * 100}%`,
+                    height: `${(layer.height / POSTER_HEIGHT) * 100}%`,
+                    zIndex: transform.zIndex,
+                    transform: `translate(-50%, -50%) rotate(${transform.rotation}deg) scale(${transform.scale})`,
+                    transformOrigin: 'center',
+                  }}
+                  onPointerDown={(event) => beginGesture('move', layer.id, event)}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={endGesture}
+                  onPointerCancel={endGesture}
+                >
+                  {layer.imageSrc ? (
+                    <img
+                      src={layer.imageSrc}
+                      alt=""
+                      draggable={false}
+                      className="pointer-events-none h-full w-full object-contain"
+                      style={{ filter: layer.shadow ? 'drop-shadow(10px 14px 8px rgba(35,25,20,.35))' : undefined }}
+                    />
+                  ) : (
+                    <div
+                      className="pointer-events-none flex h-full w-full items-center justify-center overflow-hidden whitespace-nowrap text-center leading-none"
+                      style={{
+                        color: textStyle?.gradient ? 'transparent' : textStyle?.fill,
+                        backgroundImage: textStyle?.gradient
+                          ? `linear-gradient(90deg, ${textStyle.gradient.join(', ')})`
+                          : undefined,
+                        backgroundClip: textStyle?.gradient ? 'text' : undefined,
+                        WebkitBackgroundClip: textStyle?.gradient ? 'text' : undefined,
+                        fontFamily: textStyle?.fontFamily,
+                        fontWeight: textStyle?.fontWeight,
+                        fontSize: `${((layer.textStyle?.fontSize ?? 24) / POSTER_WIDTH) * 100}cqw`,
+                        letterSpacing: `${((textStyle?.letterSpacing ?? 0) / POSTER_WIDTH) * 100}cqw`,
+                        WebkitTextStroke: textStyle?.strokeEnabled
+                          ? `${(textStyle.strokeWidth / POSTER_WIDTH) * 100}cqw ${textStyle.strokeColor}`
+                          : undefined,
+                        textShadow: textStyle?.shadow
+                          ? `${(textStyle.shadow.offsetX / POSTER_WIDTH) * 100}cqw ${(textStyle.shadow.offsetY / POSTER_WIDTH) * 100}cqw ${(textStyle.shadow.blur / POSTER_WIDTH) * 100}cqw ${textStyle.shadow.color}`
+                          : undefined,
+                        paintOrder: 'stroke fill',
+                      }}
+                    >
+                      {layer.text}
+                    </div>
+                  )}
+                  {isSelected && (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="旋转元素"
+                        className="absolute left-1/2 top-0 grid h-7 w-7 -translate-x-1/2 -translate-y-[150%] place-items-center rounded-full border-2 border-white bg-amber-500 text-sm font-black text-white shadow"
+                        onPointerDown={(event) => beginGesture('rotate', layer.id, event)}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={endGesture}
+                        onPointerCancel={endGesture}
+                      >
+                        ↻
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="缩放元素"
+                        className="absolute -bottom-3 -right-3 h-7 w-7 rounded-full border-2 border-white bg-amber-500 shadow"
+                        onPointerDown={(event) => beginGesture('scale', layer.id, event)}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={endGesture}
+                        onPointerCancel={endGesture}
+                      />
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <aside className="shrink-0 border-t border-white/10 bg-slate-900 p-3 text-white lg:w-80 lg:border-l lg:border-t-0 lg:p-5">
+          {selected && selectedLayer ? (
+            <div className="space-y-4">
+              <div>
+                <div className="text-xs font-bold text-slate-400">当前元素</div>
+                <div className="mt-1 font-black">{layerNames[selectedLayer.kind]}{selectedLayer.text ? ` · ${selectedLayer.text}` : ''}</div>
+              </div>
+              <label className="block text-xs font-bold text-slate-300">
+                大小 {selected.scale.toFixed(2)} 倍
+                <input type="range" min="0.2" max="4" step="0.05" value={selected.scale} onChange={(event) => updateTransform(selected.id, (current) => ({ ...current, scale: Number(event.target.value) }))} className="mt-2 w-full accent-amber-500" />
+              </label>
+              <label className="block text-xs font-bold text-slate-300">
+                旋转 {Math.round(selected.rotation)}°
+                <input type="range" min="0" max="359" step="1" value={selected.rotation} onChange={(event) => updateTransform(selected.id, (current) => ({ ...current, rotation: Number(event.target.value) }))} className="mt-2 w-full accent-amber-500" />
+              </label>
+              {selectedTextStyle && (
+                <div className="space-y-3 border-t border-white/10 pt-4">
+                  <div>
+                    <div className="text-sm font-black">文字样式</div>
+                    <div className="mt-0.5 text-xs text-slate-400">以下调整默认只作用于当前文字</div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-bold text-slate-300">艺术字</div>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {posterTextEffectPresets.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => updateSelectedTextStyle(preset.patch)}
+                          className={`min-h-10 rounded-lg border px-2 text-xs font-bold ${selectedTextStyle.effect === preset.id ? 'border-orange-400 bg-orange-500 text-white' : 'border-white/20 text-slate-200 hover:bg-white/10'}`}
+                        >
+                          {preset.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs font-bold text-slate-300">
+                      文字颜色
+                      <input
+                        type="color"
+                        value={colorInputValue(selectedTextStyle.fill, '#FFFFFF')}
+                        onChange={(event) => updateSelectedTextStyle({ fill: event.target.value })}
+                        className="mt-2 h-10 w-full rounded-lg border border-white/20 bg-transparent"
+                      />
+                    </label>
+                    <label className="text-xs font-bold text-slate-300">
+                      描边颜色
+                      <input
+                        type="color"
+                        value={colorInputValue(selectedTextStyle.strokeColor, '#111111')}
+                        onChange={(event) => updateSelectedTextStyle({ strokeColor: event.target.value })}
+                        disabled={!selectedTextStyle.strokeEnabled}
+                        className="mt-2 h-10 w-full rounded-lg border border-white/20 bg-transparent disabled:opacity-35"
+                      />
+                    </label>
+                  </div>
+
+                  <label className="flex min-h-10 items-center justify-between rounded-lg border border-white/15 px-3 text-xs font-bold text-slate-300">
+                    <span>开启描边</span>
+                    <input
+                      type="checkbox"
+                      checked={selectedTextStyle.strokeEnabled}
+                      onChange={(event) => updateSelectedTextStyle({ strokeEnabled: event.target.checked })}
+                      className="h-5 w-5 accent-orange-500"
+                    />
+                  </label>
+
+                  <label className={`block text-xs font-bold text-slate-300 ${selectedTextStyle.strokeEnabled ? '' : 'opacity-40'}`}>
+                    描边粗细 {selectedTextStyle.strokeWidth}px
+                    <input
+                      type="range"
+                      min="1"
+                      max="24"
+                      step="1"
+                      value={selectedTextStyle.strokeWidth}
+                      onChange={(event) => updateSelectedTextStyle({ strokeWidth: Number(event.target.value) })}
+                      disabled={!selectedTextStyle.strokeEnabled}
+                      className="mt-2 w-full accent-orange-500"
+                    />
+                  </label>
+
+                  <label className="block text-xs font-bold text-slate-300">
+                    字体
+                    <select
+                      value={selectedTextStyle.fontFamily}
+                      onChange={(event) => updateSelectedTextStyle({ fontFamily: event.target.value })}
+                      className="mt-2 min-h-10 w-full rounded-lg border border-white/20 bg-slate-800 px-2 text-sm text-white"
+                    >
+                      {posterFontOptions.map((font) => <option key={font.name} value={font.value}>{font.name}</option>)}
+                    </select>
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block text-xs font-bold text-slate-300">
+                      字重
+                      <select
+                        value={selectedTextStyle.fontWeight}
+                        onChange={(event) => updateSelectedTextStyle({ fontWeight: Number(event.target.value) })}
+                        className="mt-2 min-h-10 w-full rounded-lg border border-white/20 bg-slate-800 px-2 text-sm text-white"
+                      >
+                        <option value="400">常规</option>
+                        <option value="600">半粗</option>
+                        <option value="800">粗体</option>
+                        <option value="900">特粗</option>
+                      </select>
+                    </label>
+                    <label className="block text-xs font-bold text-slate-300">
+                      字间距 {selectedTextStyle.letterSpacing}px
+                      <input
+                        type="range"
+                        min="-4"
+                        max="30"
+                        step="1"
+                        value={selectedTextStyle.letterSpacing}
+                        onChange={(event) => updateSelectedTextStyle({ letterSpacing: Number(event.target.value) })}
+                        className="mt-3 w-full accent-orange-500"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTextStyles((current) => current.filter((style) => style.id !== selectedLayer.id))}
+                      className="min-h-10 rounded-lg border border-white/20 px-2 text-xs font-bold hover:bg-white/10"
+                    >
+                      重置文字样式
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTextStyles(applyPosterTextStyleToAll(layers, selectedTextStyle))}
+                      className="min-h-10 rounded-lg bg-orange-500 px-2 text-xs font-black text-white hover:bg-orange-600"
+                    >
+                      应用到全部文字
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div>
+                <div className="text-xs font-bold text-slate-300">层级</div>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {([
+                    ['backward', '下移一层'], ['forward', '上移一层'], ['back', '置于底层'], ['front', '置于顶层'],
+                  ] as const).map(([direction, label]) => (
+                    <button key={direction} type="button" onClick={() => setTransforms((current) => movePosterLayer(current, selected.id, direction))} className="min-h-10 rounded-lg border border-white/20 px-2 text-xs font-bold hover:bg-white/10">{label}</button>
+                  ))}
+                </div>
+              </div>
+              <button type="button" onClick={() => updateTransform(selected.id, (current) => ({ ...current, x: selectedLayer.x, y: selectedLayer.y, scale: 1, rotation: 0 }))} className="min-h-10 w-full rounded-lg border border-white/20 px-3 text-sm font-bold hover:bg-white/10">重置当前元素</button>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed border-white/20 p-4 text-sm leading-6 text-slate-400">点击海报中的文字或图片后，可精确调整大小、角度和层级。</div>
+          )}
+        </aside>
+      </div>
+
+      <footer className="flex shrink-0 justify-end gap-2 border-t border-white/10 bg-slate-900 px-3 py-3 sm:px-5">
+        <button type="button" onClick={requestClose} className="min-h-11 rounded-lg border border-white/20 px-5 text-sm font-black text-slate-200">取消</button>
+        <button type="button" onClick={() => onApply(transforms, textStyles)} className="min-h-11 rounded-lg bg-orange-500 px-6 text-sm font-black text-white shadow">应用布局</button>
+      </footer>
+    </div>
+  );
+}

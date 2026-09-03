@@ -12,6 +12,8 @@ import React, {
   useState,
 } from 'react';
 import Link from 'next/link';
+import PosterFreeLayoutModal from '../../components/PosterFreeLayoutModal';
+import WatermarkRemovalModal from '../../components/WatermarkRemovalModal';
 import {
   BackgroundRemovalMode,
   BackgroundRemovalMethod,
@@ -19,8 +21,20 @@ import {
   processPosterImage,
   readFileAsDataUrl,
 } from '../../utils/posterProcessing';
+import {
+  POSTER_HEIGHT,
+  POSTER_WIDTH,
+  buildPosterBaseLayers,
+  classicPosterPresets,
+  getReadablePosterTextColors,
+  mergePosterLayerTransforms,
+  resolvePosterTextStyle,
+  stripFileExtension,
+  type PosterLayerTransform,
+  type PosterLayoutMode,
+  type PosterTextStyleOverride,
+} from '../../utils/posterLayout';
 
-type LayoutMode = 'auto' | '1x1' | '1x2' | '2x1' | '2x2' | '3x2' | '4x2' | '5x2' | '5x3';
 type ItemStatus = 'idle' | 'processing' | 'done' | 'error';
 
 interface PosterItem {
@@ -28,6 +42,7 @@ interface PosterItem {
   originalSrc: string;
   processedSrc: string;
   label: string;
+  sourceName: string;
   status: ItemStatus;
   progressText: string;
   progress: number;
@@ -43,10 +58,13 @@ interface PosterSettings {
   backgroundStart: string;
   backgroundEnd: string;
   useGradientBackground: boolean;
-  layoutMode: LayoutMode;
+  layoutMode: PosterLayoutMode;
   backgroundRemovalMode: BackgroundRemovalMode;
   pixelate: boolean;
   addOutline: boolean;
+  primaryText: string;
+  secondaryText: string;
+  outlineColor: string;
 }
 
 const defaultSettings: PosterSettings = {
@@ -61,9 +79,12 @@ const defaultSettings: PosterSettings = {
   backgroundRemovalMode: 'local',
   pixelate: true,
   addOutline: true,
+  primaryText: '#FFFFFF',
+  secondaryText: '#342217',
+  outlineColor: '#24160F',
 };
 
-const backgroundPresets = [
+const legacyBackgroundColors = [
   ['#F7F0DF', '#FFFDF6'],
   ['#EFE4CF', '#FAF3E7'],
   ['#E8DCC7', '#F7F2EA'],
@@ -90,95 +111,15 @@ const backgroundPresets = [
   ['#F2F2F2', '#D8E3EA'],
 ];
 
-interface PosterLayout {
-  cols: number;
-  rows: number;
-  capacity: number;
-}
-
-const fixedLayouts: Record<Exclude<LayoutMode, 'auto'>, PosterLayout> = {
-  '1x1': { cols: 1, rows: 1, capacity: 1 },
-  '1x2': { cols: 1, rows: 2, capacity: 2 },
-  '2x1': { cols: 2, rows: 1, capacity: 2 },
-  '2x2': { cols: 2, rows: 2, capacity: 4 },
-  '3x2': { cols: 3, rows: 2, capacity: 6 },
-  '4x2': { cols: 4, rows: 2, capacity: 8 },
-  '5x2': { cols: 5, rows: 2, capacity: 10 },
-  '5x3': { cols: 5, rows: 3, capacity: 15 },
-};
-
-function getPosterLayout(count: number, mode: LayoutMode): PosterLayout {
-  if (mode !== 'auto') return fixedLayouts[mode];
-  if (count <= 1) return fixedLayouts['1x1'];
-  if (count <= 2) return fixedLayouts['1x2'];
-  if (count <= 4) return fixedLayouts['2x2'];
-  if (count <= 6) return fixedLayouts['3x2'];
-  if (count <= 8) return fixedLayouts['4x2'];
-  if (count <= 10) return fixedLayouts['5x2'];
-  return fixedLayouts['5x3'];
-}
-
-function getPosterItemArea(layout: PosterLayout) {
-  if (layout.cols === 1 && layout.rows === 1) {
-    return { x: 120, y: 320, width: 840, height: 670 };
-  }
-  if (layout.cols === 1 && layout.rows === 2) {
-    return { x: 160, y: 318, width: 760, height: 690 };
-  }
-  if (layout.cols === 2 && layout.rows === 1) {
-    return { x: 90, y: 340, width: 900, height: 620 };
-  }
-  if (layout.rows === 2) {
-    return { x: 86, y: 360, width: 908, height: 600 };
-  }
-  return { x: 86, y: 320, width: 908, height: 650 };
-}
-
-function getImageBounds(layout: PosterLayout, cellWidth: number, cellHeight: number) {
-  if (layout.cols === 1 && layout.rows === 1) {
-    return {
-      maxWidth: Math.min(560, cellWidth * 0.78),
-      maxHeight: Math.min(440, cellHeight * 0.66),
-      imageCenterRatio: 0.45,
-      labelRatio: 0.84,
-      labelFontSize: 28,
-    };
-  }
-  if (layout.cols === 1 && layout.rows === 2) {
-    return {
-      maxWidth: Math.min(430, cellWidth * 0.72),
-      maxHeight: Math.min(238, cellHeight * 0.7),
-      imageCenterRatio: 0.44,
-      labelRatio: 0.82,
-      labelFontSize: 26,
-    };
-  }
-  if (layout.cols === 2 && layout.rows === 1) {
-    return {
-      maxWidth: Math.min(340, cellWidth * 0.76),
-      maxHeight: Math.min(360, cellHeight * 0.62),
-      imageCenterRatio: 0.46,
-      labelRatio: 0.82,
-      labelFontSize: 26,
-    };
-  }
-  if (layout.cols === 2) {
-    return {
-      maxWidth: Math.min(300, cellWidth * 0.72),
-      maxHeight: Math.min(230, cellHeight * 0.68),
-      imageCenterRatio: 0.42,
-      labelRatio: 0.82,
-      labelFontSize: 24,
-    };
-  }
-  return {
-    maxWidth: Math.min(layout.rows > 2 ? 168 : 190, cellWidth * 0.82),
-    maxHeight: Math.min(layout.rows > 2 ? 146 : 190, cellHeight * 0.64),
-    imageCenterRatio: 0.42,
-    labelRatio: 0.82,
-    labelFontSize: 23,
-  };
-}
+const backgroundPresets = [
+  ...legacyBackgroundColors.map(([start, end], index) => ({
+    name: `柔和配色 ${String(index + 1).padStart(2, '0')}`,
+    start,
+    end,
+    ...getReadablePosterTextColors(start, end),
+  })),
+  ...classicPosterPresets,
+];
 
 function drawTextFit(
   ctx: CanvasRenderingContext2D,
@@ -190,11 +131,16 @@ function drawTextFit(
   minSize: number,
   family: string,
   fill: string,
-  stroke?: { color: string; width: number }
+  stroke?: { color: string; width: number },
+  weight = 900,
+  letterSpacing = 0,
+  gradientColors?: [string, string, string],
+  shadow?: { color: string; blur: number; offsetX: number; offsetY: number }
 ) {
   let size = startSize;
   do {
-    ctx.font = `900 ${size}px ${family}`;
+    ctx.font = `${weight} ${size}px ${family}`;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = `${letterSpacing}px`;
     if (ctx.measureText(text).width <= maxWidth || size <= minSize) break;
     size -= 2;
   } while (size > minSize);
@@ -202,12 +148,26 @@ function drawTextFit(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
+  if (shadow) {
+    ctx.shadowColor = shadow.color;
+    ctx.shadowBlur = shadow.blur;
+    ctx.shadowOffsetX = shadow.offsetX;
+    ctx.shadowOffsetY = shadow.offsetY;
+  }
   if (stroke) {
     ctx.strokeStyle = stroke.color;
     ctx.lineWidth = stroke.width;
     ctx.strokeText(text, x, y);
   }
-  ctx.fillStyle = fill;
+  if (gradientColors) {
+    const gradient = ctx.createLinearGradient(x - maxWidth / 2, y, x + maxWidth / 2, y);
+    gradient.addColorStop(0, gradientColors[0]);
+    gradient.addColorStop(0.5, gradientColors[1]);
+    gradient.addColorStop(1, gradientColors[2]);
+    ctx.fillStyle = gradient;
+  } else {
+    ctx.fillStyle = fill;
+  }
   ctx.fillText(text, x, y);
 }
 
@@ -241,10 +201,12 @@ function drawContainImage(
 async function renderPosterCanvas(
   canvas: HTMLCanvasElement,
   items: PosterItem[],
-  settings: PosterSettings
+  settings: PosterSettings,
+  customTransforms: PosterLayerTransform[] | null,
+  textStyleOverrides: PosterTextStyleOverride[]
 ) {
-  const width = 1080;
-  const height = 1440;
+  const width = POSTER_WIDTH;
+  const height = POSTER_HEIGHT;
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
@@ -261,112 +223,79 @@ async function renderPosterCanvas(
   }
   ctx.fillRect(0, 0, width, height);
 
-  const titleText = settings.title.trim();
-  if (titleText) {
-    drawTextFit(
-      ctx,
-      titleText,
-      width / 2,
-      150,
-      780,
-      76,
-      42,
-      'Impact, Arial Black, sans-serif',
-      '#ffffff',
-      { color: '#24160f', width: 12 }
-    );
-  }
-
-  const subtitleText = settings.subtitle.trim();
-  if (subtitleText) {
-    ctx.font = '400 30px Arial, sans-serif';
-    ctx.fillStyle = 'rgba(52, 34, 23, 0.88)';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(subtitleText, width / 2, 242);
-  }
-
-  const layout = getPosterLayout(items.length, settings.layoutMode);
-  const visibleItems = items.slice(0, layout.capacity);
-  const count = visibleItems.length;
-  const cols = layout.cols;
-  const rows = layout.rows;
-  const visibleRows = layout.cols === 1 ? Math.max(1, Math.min(layout.rows, count)) : rows;
-  const area = getPosterItemArea(layout);
-  const cellWidth = area.width / cols;
-  const cellHeight = area.height / visibleRows;
-  const imageBounds = getImageBounds(layout, cellWidth, cellHeight);
-
-  const loadedImages = await Promise.all(
-    visibleItems.map(async (item) => {
+  const baseLayers = buildPosterBaseLayers(
+    items.map((item) => ({
+      id: item.id,
+      imageSrc: item.processedSrc || item.originalSrc,
+      label: item.label,
+      sourceName: item.sourceName,
+    })),
+    settings
+  );
+  const transformById = new Map(
+    mergePosterLayerTransforms(baseLayers, customTransforms).map((transform) => [transform.id, transform])
+  );
+  const resolvedLayers = baseLayers
+    .map((layer) => ({ layer, transform: transformById.get(layer.id) }))
+    .filter((entry) => entry.transform)
+    .sort((a, b) => a.transform!.zIndex - b.transform!.zIndex);
+  const loadedImages = new Map<string, HTMLImageElement | null>();
+  await Promise.all(
+    resolvedLayers.map(async ({ layer }) => {
+      if (!layer.imageSrc) return;
       try {
-        return await loadImage(item.processedSrc || item.originalSrc);
+        loadedImages.set(layer.id, await loadImage(layer.imageSrc));
       } catch {
-        return null;
+        loadedImages.set(layer.id, null);
       }
     })
   );
 
-  visibleItems.forEach((item, index) => {
-    const img = loadedImages[index];
-    const row = Math.floor(index / cols);
-    const col = index % cols;
-    const centerX = area.x + col * cellWidth + cellWidth / 2;
-    const cellTop = area.y + row * cellHeight;
-    const imageCenterY = cellTop + cellHeight * imageBounds.imageCenterRatio;
-    const labelY = cellTop + cellHeight * imageBounds.labelRatio;
-
-    if (img) {
-      drawContainImage(ctx, img, centerX, imageCenterY, imageBounds.maxWidth, imageBounds.maxHeight, true);
-    } else {
-      ctx.fillStyle = 'rgba(255,255,255,0.42)';
-      ctx.fillRect(centerX - 58, imageCenterY - 58, 116, 116);
+  resolvedLayers.forEach(({ layer, transform }) => {
+    if (!transform) return;
+    ctx.save();
+    ctx.translate(transform.x, transform.y);
+    ctx.rotate((transform.rotation * Math.PI) / 180);
+    ctx.scale(transform.scale, transform.scale);
+    if (layer.imageSrc) {
+      const image = loadedImages.get(layer.id);
+      if (image) {
+        drawContainImage(ctx, image, 0, 0, layer.width, layer.height, Boolean(layer.shadow));
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.42)';
+        ctx.fillRect(-58, -58, 116, 116);
+      }
+    } else if (layer.text && layer.textStyle) {
+      const textStyle = resolvePosterTextStyle(layer, textStyleOverrides);
+      drawTextFit(
+        ctx,
+        layer.text,
+        0,
+        0,
+        layer.width,
+        layer.textStyle.fontSize,
+        layer.textStyle.minFontSize,
+        textStyle.fontFamily,
+        textStyle.fill,
+        textStyle.strokeEnabled
+          ? { color: textStyle.strokeColor, width: textStyle.strokeWidth }
+          : undefined,
+        textStyle.fontWeight,
+        textStyle.letterSpacing,
+        textStyle.gradient,
+        textStyle.shadow
+      );
     }
-
-    ctx.font = `600 ${imageBounds.labelFontSize}px Arial, sans-serif`;
-    ctx.fillStyle = 'rgba(54, 38, 28, 0.92)';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const label = item.label.trim();
-    if (label) {
-      ctx.fillText(label, centerX, labelY, cellWidth - 16);
-    }
+    ctx.restore();
   });
 
-  if (count === 0) {
+  if (items.length === 0) {
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = '700 34px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     ctx.fillText('上传图片后自动生成排版预览', width / 2, 650);
   }
-
-  const bottomTitleText = settings.bottomTitle.trim();
-  if (bottomTitleText) {
-    drawTextFit(
-      ctx,
-      bottomTitleText,
-      width / 2,
-      1146,
-      840,
-      92,
-      48,
-      'Arial Black, PingFang SC, Microsoft YaHei, sans-serif',
-      '#ffffff',
-      { color: '#050505', width: 14 }
-    );
-  }
-
-  drawTextFit(
-    ctx,
-    settings.fixedText,
-    width / 2,
-    1266,
-    760,
-    56,
-    36,
-    'Arial Black, PingFang SC, Microsoft YaHei, sans-serif',
-    '#ffffff',
-    { color: '#050505', width: 10 }
-  );
 }
 
 function createId(): string {
@@ -380,27 +309,60 @@ export default function PosterPage() {
   const [settings, setSettings] = useState<PosterSettings>(defaultSettings);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [watermarkItemId, setWatermarkItemId] = useState<string | null>(null);
+  const [isFreeLayoutOpen, setIsFreeLayoutOpen] = useState(false);
+  const [customTransforms, setCustomTransforms] = useState<PosterLayerTransform[] | null>(null);
+  const [textStyleOverrides, setTextStyleOverrides] = useState<PosterTextStyleOverride[]>([]);
 
   const processedCount = useMemo(
     () => items.filter((item) => item.status === 'done').length,
     [items]
   );
+  const posterLayers = useMemo(
+    () =>
+      buildPosterBaseLayers(
+        items.map((item) => ({
+          id: item.id,
+          imageSrc: item.processedSrc || item.originalSrc,
+          label: item.label,
+          sourceName: item.sourceName,
+        })),
+        settings
+      ),
+    [items, settings]
+  );
+  const watermarkItem = items.find((item) => item.id === watermarkItemId) ?? null;
 
   const updateSettings = <K extends keyof PosterSettings>(key: K, value: PosterSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const updateBackgroundColor = (key: 'backgroundStart' | 'backgroundEnd', value: string) => {
+    setSettings((prev) => {
+      const backgroundStart = key === 'backgroundStart' ? value : prev.backgroundStart;
+      const backgroundEnd = key === 'backgroundEnd' ? value : prev.backgroundEnd;
+      const textColors = getReadablePosterTextColors(backgroundStart, backgroundEnd);
+      return {
+        ...prev,
+        [key]: value,
+        primaryText: textColors.primary,
+        secondaryText: textColors.secondary,
+        outlineColor: textColors.outline,
+      };
+    });
   };
 
   useEffect(() => {
     let cancelled = false;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    renderPosterCanvas(canvas, items, settings).then(() => {
+    renderPosterCanvas(canvas, items, settings, customTransforms, textStyleOverrides).then(() => {
       if (cancelled) return;
     });
     return () => {
       cancelled = true;
     };
-  }, [items, settings]);
+  }, [items, settings, customTransforms, textStyleOverrides]);
 
   const addFiles = useCallback(async (files: FileList | File[]) => {
     const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
@@ -414,6 +376,7 @@ export default function PosterPage() {
           originalSrc: dataUrl,
           processedSrc: dataUrl,
           label: '',
+          sourceName: stripFileExtension(file.name),
           status: 'idle',
           progressText: '待处理',
           progress: 0,
@@ -522,6 +485,26 @@ export default function PosterPage() {
     setItems((prev) => prev.filter((item) => item.id !== id));
   };
 
+  const applyWatermarkRemoval = (itemId: string, cleanedImageSrc: string) => {
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              originalSrc: cleanedImageSrc,
+              processedSrc: cleanedImageSrc,
+              status: 'idle',
+              progressText: '去水印完成，待处理',
+              progress: 0,
+              backgroundMethod: 'none',
+              error: undefined,
+            }
+          : item
+      )
+    );
+    setWatermarkItemId(null);
+  };
+
   const moveItem = (id: string, direction: -1 | 1) => {
     setItems((prev) => {
       const index = prev.findIndex((item) => item.id === id);
@@ -544,7 +527,7 @@ export default function PosterPage() {
 
   const downloadPoster = async () => {
     const canvas = document.createElement('canvas');
-    await renderPosterCanvas(canvas, items, settings);
+    await renderPosterCanvas(canvas, items, settings, customTransforms, textStyleOverrides);
     const link = document.createElement('a');
     link.download = `poster-${new Date().toISOString().slice(0, 10)}.png`;
     link.href = canvas.toDataURL('image/png');
@@ -678,19 +661,30 @@ export default function PosterPage() {
               />
             </label>
             <div className="mt-3 grid grid-cols-5 gap-2 sm:grid-cols-6">
-              {backgroundPresets.map(([start, end]) => (
+              {backgroundPresets.map((preset) => (
                 <button
-                  key={`${start}-${end}`}
+                  key={`${preset.name}-${preset.start}-${preset.end}`}
                   type="button"
                   onClick={() =>
-                    setSettings((prev) => ({ ...prev, backgroundStart: start, backgroundEnd: end }))
+                    setSettings((prev) => ({
+                      ...prev,
+                      backgroundStart: preset.start,
+                      backgroundEnd: preset.end,
+                      primaryText: preset.primary,
+                      secondaryText: preset.secondary,
+                      outlineColor: preset.outline,
+                    }))
                   }
-                  className="h-10 rounded-md border border-slate-300 sm:h-8"
-                  style={{ background: `linear-gradient(90deg, ${start}, ${end})` }}
-                  aria-label="选择背景色"
+                  className="group relative h-10 rounded-md border border-slate-300 sm:h-8"
+                  style={{ background: `linear-gradient(90deg, ${preset.start}, ${preset.end})` }}
+                  aria-label={`选择${preset.name}背景色`}
+                  title={preset.name}
                 />
               ))}
             </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              后 10 组为经典搭配：奶油杏橙、蜜桃珊瑚、樱花莓粉、薄荷青柠、海盐晴空、薰衣草雾、复古焦糖、孔雀蓝绿、午夜靛蓝、莓果酒红。
+            </p>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <label className="block">
                 <span className="mb-1 block text-xs font-bold text-slate-500">
@@ -699,7 +693,7 @@ export default function PosterPage() {
                 <input
                   type="color"
                   value={settings.backgroundStart}
-                  onChange={(event) => updateSettings('backgroundStart', event.target.value)}
+                  onChange={(event) => updateBackgroundColor('backgroundStart', event.target.value)}
                   className="h-11 w-full rounded-md border border-slate-300"
                 />
               </label>
@@ -708,7 +702,7 @@ export default function PosterPage() {
                 <input
                   type="color"
                   value={settings.backgroundEnd}
-                  onChange={(event) => updateSettings('backgroundEnd', event.target.value)}
+                  onChange={(event) => updateBackgroundColor('backgroundEnd', event.target.value)}
                   disabled={!settings.useGradientBackground}
                   className="h-11 w-full rounded-md border border-slate-300 disabled:cursor-not-allowed"
                 />
@@ -718,7 +712,7 @@ export default function PosterPage() {
             <label className="mt-3 block text-xs font-bold text-slate-500">布局</label>
             <select
               value={settings.layoutMode}
-              onChange={(event) => updateSettings('layoutMode', event.target.value as LayoutMode)}
+              onChange={(event) => updateSettings('layoutMode', event.target.value as PosterLayoutMode)}
               className="mt-1 min-h-11 w-full rounded-md border border-slate-300 px-3 py-2 text-base md:text-sm"
             >
               <option value="auto">自动</option>
@@ -731,6 +725,31 @@ export default function PosterPage() {
               <option value="5x2">5 x 2</option>
               <option value="5x3">5 x 3</option>
             </select>
+
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isFreeLayoutOpen}
+              onClick={() => setIsFreeLayoutOpen(true)}
+              disabled={posterLayers.length === 0}
+              className="mt-3 flex min-h-12 w-full items-center justify-between rounded-md border border-slate-300 bg-slate-50 px-3 text-left text-sm font-bold disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <span>
+                解锁自由布局
+                <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                  全屏拖动、缩放、旋转文字和图片
+                </span>
+              </span>
+              <span className={`relative h-7 w-12 rounded-full transition ${isFreeLayoutOpen ? 'bg-orange-500' : 'bg-slate-300'}`}>
+                <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition ${isFreeLayoutOpen ? 'left-6' : 'left-1'}`} />
+              </span>
+            </button>
+            {customTransforms && (
+              <div className="mt-2 flex items-center justify-between rounded-md bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                <span>已应用自定义布局</span>
+                <button type="button" onClick={() => setCustomTransforms(null)} className="underline underline-offset-2">恢复自动布局</button>
+              </div>
+            )}
           </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -792,7 +811,10 @@ export default function PosterPage() {
               <h2 className="text-sm font-black">图片与文字</h2>
               {items.length > 0 && (
                 <button
-                  onClick={() => setItems([])}
+                  onClick={() => {
+                    setItems([]);
+                    setCustomTransforms(null);
+                  }}
                   className="rounded-md border border-slate-300 px-2 py-1 text-xs font-bold text-slate-600 hover:bg-slate-50"
                 >
                   清空
@@ -824,7 +846,7 @@ export default function PosterPage() {
                         </span>
                         <input
                           value={item.label}
-                          placeholder="如：成龙、小玉、老爹、特鲁、布莱克警长、毒蛇、瓦龙、刀龙"
+                          placeholder={item.sourceName || '输入图片名称'}
                           onChange={(event) => updateItemLabel(item.id, event.target.value)}
                           className="min-h-10 min-w-0 flex-1 rounded-md border border-slate-300 px-2 py-1 text-base md:text-sm"
                         />
@@ -845,7 +867,15 @@ export default function PosterPage() {
                     </div>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                    <button
+                      type="button"
+                      onClick={() => setWatermarkItemId(item.id)}
+                      disabled={item.status === 'processing' || isBatchProcessing}
+                      className="min-h-10 rounded-md border border-amber-300 bg-amber-50 px-2 py-2 text-xs font-bold text-amber-800 disabled:opacity-45"
+                    >
+                      框选去水印
+                    </button>
                     <button
                       onClick={() => processItem(item.id)}
                       disabled={item.status === 'processing' || isBatchProcessing}
@@ -908,6 +938,35 @@ export default function PosterPage() {
           </button>
         </div>
       </div>
+      {watermarkItem && (
+        <WatermarkRemovalModal
+          imageSrc={watermarkItem.originalSrc}
+          isOpen
+          onClose={() => setWatermarkItemId(null)}
+          onContinue={(cleanedImageSrc) => applyWatermarkRemoval(watermarkItem.id, cleanedImageSrc)}
+          title="封面图片手动去水印"
+          description="拖动黄色选区覆盖水印，可连续处理多个区域；完成后返回封面排版。"
+          continueLabel="不处理并返回"
+          completedContinueLabel="完成并返回封面"
+          completedMessage="可继续框选或返回封面排版。"
+        />
+      )}
+      <PosterFreeLayoutModal
+        isOpen={isFreeLayoutOpen}
+        layers={posterLayers}
+        initialTransforms={customTransforms}
+        initialTextStyles={textStyleOverrides}
+        backgroundStart={settings.backgroundStart}
+        backgroundEnd={settings.backgroundEnd}
+        useGradientBackground={settings.useGradientBackground}
+        onClose={() => setIsFreeLayoutOpen(false)}
+        onApply={(transforms, textStyles) => {
+          setCustomTransforms(transforms);
+          setTextStyleOverrides(textStyles);
+          setIsFreeLayoutOpen(false);
+        }}
+        onReset={() => setCustomTransforms(null)}
+      />
     </main>
   );
 }

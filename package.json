@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev -p 8888",
     "build": "next build",
-    "test": "node --no-warnings --test --experimental-strip-types src/utils/colorCountInput.test.ts src/utils/paletteSelection.test.ts src/utils/patternColorProcessing.test.ts src/utils/sourceGridSampling.test.ts",
+    "test": "node --no-warnings --test --experimental-strip-types src/utils/colorCountInput.test.ts src/utils/paletteSelection.test.ts src/utils/patternColorProcessing.test.ts src/utils/sourceGridSampling.test.ts src/utils/posterLayout.test.ts",
     "start": "next start",
     "lint": "next lint",
     "pages:dev": "npx wrangler pages dev out --compatibility-flag=nodejs_compat",

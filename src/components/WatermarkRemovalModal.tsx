@@ -26,6 +26,11 @@ interface WatermarkRemovalModalProps {
   isOpen: boolean;
   onClose: () => void;
   onContinue: (imageSrc: string) => void;
+  title?: string;
+  description?: string;
+  continueLabel?: string;
+  completedContinueLabel?: string;
+  completedMessage?: string;
 }
 
 export default function WatermarkRemovalModal({
@@ -33,6 +38,11 @@ export default function WatermarkRemovalModal({
   isOpen,
   onClose,
   onContinue,
+  title = '生成前手动去水印',
+  description = '拖动黄色选区覆盖水印，处理完成后再进入裁剪',
+  continueLabel = '跳过并去裁剪',
+  completedContinueLabel = '完成并去裁剪',
+  completedMessage = '可继续框选或进入裁剪。',
 }: WatermarkRemovalModalProps) {
   const [workingImageSrc, setWorkingImageSrc] = useState(imageSrc);
   const [selection, setSelection] = useState<WatermarkSelection>(defaultSelection);
@@ -175,8 +185,8 @@ export default function WatermarkRemovalModal({
       <div className="max-h-[96vh] w-full overflow-y-auto rounded-t-2xl bg-[#fffdf8] shadow-2xl sm:max-w-5xl sm:rounded-2xl dark:bg-gray-900">
         <div className="flex items-start justify-between gap-4 border-b border-[#e7dfd4] px-5 py-4 dark:border-gray-700">
           <div>
-            <h2 id="watermark-removal-title" className="text-xl font-black text-[#2e2924] dark:text-white">生成前手动去水印</h2>
-            <p className="mt-1 text-sm font-semibold text-[#81786d] dark:text-gray-300">拖动黄色选区覆盖水印，处理完成后再进入裁剪</p>
+            <h2 id="watermark-removal-title" className="text-xl font-black text-[#2e2924] dark:text-white">{title}</h2>
+            <p className="mt-1 text-sm font-semibold text-[#81786d] dark:text-gray-300">{description}</p>
           </div>
           <button type="button" onClick={onClose} disabled={isProcessing} className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-[#ded5c9] text-2xl text-[#766e65] hover:bg-[#f8f1e8] disabled:opacity-50 dark:border-gray-600 dark:text-gray-200" aria-label="关闭去水印">
             ×
@@ -246,14 +256,14 @@ export default function WatermarkRemovalModal({
             </div>
 
             {error && <div className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700 dark:bg-red-950/40 dark:text-red-200">{error}</div>}
-            {removedCount > 0 && <div className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200">已处理 {removedCount} 个水印区域，可继续框选或进入裁剪。</div>}
+            {removedCount > 0 && <div className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200">已处理 {removedCount} 个水印区域，{completedMessage}</div>}
 
             <button type="button" onClick={handleApply} disabled={isProcessing} className="min-h-11 w-full rounded-xl bg-amber-500 px-4 py-2 text-sm font-black text-white shadow-sm hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50">
               {isProcessing ? '正在移除水印…' : '移除框选水印'}
             </button>
             <div className="grid grid-cols-2 gap-2">
               <button type="button" onClick={() => { setWorkingImageSrc(imageSrc); setRemovedCount(0); setError(null); }} disabled={isProcessing || removedCount === 0} className="min-h-11 rounded-xl border border-[#ddd4c8] bg-white px-3 py-2 text-sm font-black text-[#675f56] disabled:opacity-40 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200">恢复原图</button>
-              <button type="button" onClick={() => onContinue(workingImageSrc)} disabled={isProcessing} className="min-h-11 rounded-xl bg-[#ef872d] px-3 py-2 text-sm font-black text-white shadow-sm hover:bg-[#db7520] disabled:opacity-50">{removedCount > 0 ? '完成并去裁剪' : '跳过并去裁剪'}</button>
+              <button type="button" onClick={() => onContinue(workingImageSrc)} disabled={isProcessing} className="min-h-11 rounded-xl bg-[#ef872d] px-3 py-2 text-sm font-black text-white shadow-sm hover:bg-[#db7520] disabled:opacity-50">{removedCount > 0 ? completedContinueLabel : continueLabel}</button>
             </div>
           </aside>
         </div>
