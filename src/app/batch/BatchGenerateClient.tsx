@@ -4,6 +4,7 @@
 
 import Link from 'next/link';
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+import BatchPatternSettings from '../../components/BatchPatternSettings';
 import { GridDownloadOptions } from '../../types/downloadTypes';
 import {
   downloadImage,
@@ -11,12 +12,11 @@ import {
   releaseDownloadImagePreviewUrl,
   saveImageBlob,
 } from '../../utils/imageDownloader';
-import { colorSystemOptions, ColorSystem } from '../../utils/colorSystemUtils';
-import { PixelationMode } from '../../utils/pixelation';
 import {
   buildDefaultBeadPalette,
   DEFAULT_PATTERN_GENERATION_OPTIONS,
   generatePatternFromImage,
+  normalizePatternGenerationOptions,
   PatternGenerationOptions,
   PatternGenerationResult,
   renderPatternThumbnailUrl,
@@ -70,11 +70,6 @@ function naturalSortFiles(files: File[]) {
   return files.slice().sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }));
 }
 
-function clampNumber(value: number, min: number, max: number) {
-  if (Number.isNaN(value)) return min;
-  return Math.min(max, Math.max(min, value));
-}
-
 function revokeUrl(url?: string) {
   if (url?.startsWith('blob:')) {
     URL.revokeObjectURL(url);
@@ -94,10 +89,7 @@ function serializeBatchItems(items: BatchItem[]): StoredBatchItem[] {
 }
 
 function normalizeGenerationOptions(options: PatternGenerationOptions): PatternGenerationOptions {
-  return {
-    ...options,
-    autoRemoveBackground: true,
-  };
+  return normalizePatternGenerationOptions(options);
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -117,7 +109,9 @@ function readFileAsDataUrl(file: File): Promise<string> {
 
 export default function BatchGenerateClient() {
   const [items, setItems] = useState<BatchItem[]>([]);
-  const [globalOptions, setGlobalOptions] = useState<PatternGenerationOptions>(DEFAULT_PATTERN_GENERATION_OPTIONS);
+  const [globalOptions, setGlobalOptions] = useState<PatternGenerationOptions>(() => ({
+    ...DEFAULT_PATTERN_GENERATION_OPTIONS,
+  }));
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
   const [isSessionReady, setIsSessionReady] = useState(false);
   const [preview, setPreview] = useState<PatternPreviewState | null>(null);
@@ -413,20 +407,10 @@ export default function BatchGenerateClient() {
     });
   };
 
-  const updateGlobalNumberOption = (
-    key: 'granularity' | 'similarityThreshold' | 'maxColorCount',
-    value: number
-  ) => {
-    const limits = {
-      granularity: [10, 300],
-      similarityThreshold: [0, 100],
-      maxColorCount: [1, 128],
-    } as const;
-    const [min, max] = limits[key];
-
-    setGlobalOptions((currentOptions) => ({
+  const updateGlobalOptions = (patch: Partial<PatternGenerationOptions>) => {
+    setGlobalOptions((currentOptions) => normalizeGenerationOptions({
       ...currentOptions,
-      [key]: clampNumber(value, min, max),
+      ...patch,
     }));
   };
 
@@ -487,81 +471,12 @@ export default function BatchGenerateClient() {
 
           <aside className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="text-sm font-black text-slate-950">全局参数</h2>
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              <label className="block">
-                <span className="text-xs font-bold text-slate-500">横轴</span>
-                <input
-                  type="number"
-                  min={10}
-                  max={300}
-                  value={globalOptions.granularity}
-                  disabled={isBusy}
-                  onChange={(event) => updateGlobalNumberOption('granularity', Number(event.target.value))}
-                  className="mt-1 h-10 w-full rounded-md border border-slate-300 px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                />
-              </label>
-              <label className="block">
-                <span className="text-xs font-bold text-slate-500">合并阈值</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={globalOptions.similarityThreshold}
-                  disabled={isBusy}
-                  onChange={(event) => updateGlobalNumberOption('similarityThreshold', Number(event.target.value))}
-                  className="mt-1 h-10 w-full rounded-md border border-slate-300 px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                />
-              </label>
-              <label className="block">
-                <span className="text-xs font-bold text-slate-500">颜色上限</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={128}
-                  value={globalOptions.maxColorCount}
-                  disabled={isBusy}
-                  onChange={(event) => updateGlobalNumberOption('maxColorCount', Number(event.target.value))}
-                  className="mt-1 h-10 w-full rounded-md border border-slate-300 px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                />
-              </label>
-            </div>
-
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <label className="block">
-                <span className="text-xs font-bold text-slate-500">模式</span>
-                <select
-                  value={globalOptions.pixelationMode}
-                  disabled={isBusy}
-                  onChange={(event) => setGlobalOptions((currentOptions) => ({
-                    ...currentOptions,
-                    pixelationMode: event.target.value as PixelationMode,
-                  }))}
-                  className="mt-1 h-10 w-full rounded-md border border-slate-300 px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <option value={PixelationMode.Dominant}>卡通</option>
-                  <option value={PixelationMode.Average}>真实</option>
-                </select>
-              </label>
-              <label className="block">
-                <span className="text-xs font-bold text-slate-500">色号</span>
-                <select
-                  value={globalOptions.selectedColorSystem}
-                  disabled={isBusy}
-                  onChange={(event) => setGlobalOptions((currentOptions) => ({
-                    ...currentOptions,
-                    selectedColorSystem: event.target.value as ColorSystem,
-                  }))}
-                  className="mt-1 h-10 w-full rounded-md border border-slate-300 px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {colorSystemOptions.map((option) => (
-                    <option key={option.key} value={option.key}>{option.name}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="mt-3 rounded-md bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700">
-              已按工具页流程默认执行一键去背景
+            <div className="mt-3">
+              <BatchPatternSettings
+                options={globalOptions}
+                disabled={isBusy}
+                onChange={updateGlobalOptions}
+              />
             </div>
 
             <div className="mt-4 grid grid-cols-2 gap-2">
@@ -650,80 +565,19 @@ export default function BatchGenerateClient() {
                   </p>
                 )}
 
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  <label className="block">
-                    <span className="text-xs font-bold text-slate-500">横轴</span>
-                    <input
-                      type="number"
-                      min={10}
-                      max={300}
-                      value={item.options.granularity}
+                <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50">
+                  <summary className="cursor-pointer select-none px-3 py-2 text-sm font-black text-slate-700">
+                    调整本图参数 · {item.options.granularity} 格 · {item.options.maxColorCount} 色
+                  </summary>
+                  <div className="border-t border-slate-200 bg-white p-3">
+                    <BatchPatternSettings
+                      options={item.options}
                       disabled={isBusy}
-                      onChange={(event) => updateItemOptions(item.id, {
-                        granularity: clampNumber(Number(event.target.value), 10, 300),
-                      })}
-                      className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                      compact
+                      onChange={(patch) => updateItemOptions(item.id, patch)}
                     />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs font-bold text-slate-500">阈值</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={item.options.similarityThreshold}
-                      disabled={isBusy}
-                      onChange={(event) => updateItemOptions(item.id, {
-                        similarityThreshold: clampNumber(Number(event.target.value), 0, 100),
-                      })}
-                      className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs font-bold text-slate-500">颜色</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={128}
-                      value={item.options.maxColorCount}
-                      disabled={isBusy}
-                      onChange={(event) => updateItemOptions(item.id, {
-                        maxColorCount: clampNumber(Number(event.target.value), 1, 128),
-                      })}
-                      className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                  </label>
-                </div>
-
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <select
-                    value={item.options.pixelationMode}
-                    disabled={isBusy}
-                    onChange={(event) => updateItemOptions(item.id, {
-                      pixelationMode: event.target.value as PixelationMode,
-                    })}
-                    className="h-9 rounded-md border border-slate-300 px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <option value={PixelationMode.Dominant}>卡通</option>
-                    <option value={PixelationMode.Average}>真实</option>
-                  </select>
-                  <select
-                    value={item.options.selectedColorSystem}
-                    disabled={isBusy}
-                    onChange={(event) => updateItemOptions(item.id, {
-                      selectedColorSystem: event.target.value as ColorSystem,
-                    })}
-                    className="h-9 rounded-md border border-slate-300 px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {colorSystemOptions.map((option) => (
-                      <option key={option.key} value={option.key}>{option.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="mt-2 rounded-md bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
-                  默认一键去背景
-                </div>
+                  </div>
+                </details>
 
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <button

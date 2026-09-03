@@ -4,17 +4,10 @@ import { useEffect, useState } from 'react';
 import type { ChangeEvent, CSSProperties, KeyboardEvent } from 'react';
 import type { ColorSystem } from '../utils/colorSystemUtils';
 import { normalizeColorCountInput } from '../utils/colorCountInput';
+import type { PatternPreset, PatternPresetId } from '../utils/patternGenerationOptions';
 import MobileSafeRange from './MobileSafeRange';
 
-export type PatternPresetId = 'economy' | 'balanced' | 'portrait' | 'detailed' | 'large';
-
-export type PatternPreset = {
-  id: PatternPresetId;
-  label: string;
-  granularity: number;
-  maxColorCount: number;
-  similarityThreshold: number;
-};
+export type { PatternPreset, PatternPresetId } from '../utils/patternGenerationOptions';
 
 type ProcessingOption = 'horizontalMirror' | 'verticalMirror' | 'removeBackground' | 'outline';
 

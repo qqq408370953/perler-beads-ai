@@ -93,9 +93,6 @@ const fullBeadPalette: PaletteColor[] = Object.entries(mardToHexMapping)
   })
   .filter((color): color is PaletteColor => color !== null);
 
-// ++ Add definition for background color keys ++
-const DEFAULT_GRANULARITY = 52;
-
 type ColorCountMap = {
   [hexKey: string]: {
     count: number;
@@ -133,29 +130,27 @@ import DonationModal from '../components/DonationModal';
 import FocusModePreDownloadModal from '../components/FocusModePreDownloadModal';
 import ImageCropperModal from '../components/ImageCropperModal';
 import AIOptimizeModal from '../components/AIOptimizeModal';
-import PatternSettingsPanel, { PatternPreset, PatternPresetId } from '../components/PatternSettingsPanel';
+import PatternSettingsPanel from '../components/PatternSettingsPanel';
+import {
+  DEFAULT_PATTERN_GENERATION_OPTIONS,
+  PATTERN_PRESETS,
+  type PatternPreset,
+  type PatternPresetId,
+} from '../utils/patternGenerationOptions';
 import { consumeSingleToolHandoff } from '../utils/singleToolHandoff';
 import { updateBatchSessionItem } from '../utils/batchSessionStore';
 
-const PATTERN_PRESETS: readonly PatternPreset[] = [
-  { id: 'economy', label: '省豆', granularity: 32, maxColorCount: 10, similarityThreshold: 18 },
-  { id: 'balanced', label: '均衡', granularity: 52, maxColorCount: 16, similarityThreshold: 14 },
-  { id: 'portrait', label: '头像', granularity: 64, maxColorCount: 18, similarityThreshold: 12 },
-  { id: 'detailed', label: '精细', granularity: 104, maxColorCount: 24, similarityThreshold: 10 },
-  { id: 'large', label: '大图', granularity: 156, maxColorCount: 32, similarityThreshold: 8 },
-];
-
 export default function Home() {
   const [originalImageSrc, setOriginalImageSrc] = useState<string | null>(null);
-  const [granularity, setGranularity] = useState<number>(DEFAULT_GRANULARITY);
-  const [similarityThreshold, setSimilarityThreshold] = useState<number>(14);
-  const [maxColorCount, setMaxColorCount] = useState<number>(16);
+  const [granularity, setGranularity] = useState<number>(DEFAULT_PATTERN_GENERATION_OPTIONS.granularity);
+  const [similarityThreshold, setSimilarityThreshold] = useState<number>(DEFAULT_PATTERN_GENERATION_OPTIONS.similarityThreshold);
+  const [maxColorCount, setMaxColorCount] = useState<number>(DEFAULT_PATTERN_GENERATION_OPTIONS.maxColorCount);
   const [selectedPreset, setSelectedPreset] = useState<PatternPresetId | null>('balanced');
-  const [brightness, setBrightness] = useState<number>(0);
-  const [isHorizontalMirrored, setIsHorizontalMirrored] = useState<boolean>(false);
-  const [isVerticalMirrored, setIsVerticalMirrored] = useState<boolean>(false);
-  const [removeBackgroundEnabled, setRemoveBackgroundEnabled] = useState<boolean>(true);
-  const [outlineEnabled, setOutlineEnabled] = useState<boolean>(false);
+  const [brightness, setBrightness] = useState<number>(DEFAULT_PATTERN_GENERATION_OPTIONS.brightness);
+  const [isHorizontalMirrored, setIsHorizontalMirrored] = useState<boolean>(DEFAULT_PATTERN_GENERATION_OPTIONS.horizontalMirror);
+  const [isVerticalMirrored, setIsVerticalMirrored] = useState<boolean>(DEFAULT_PATTERN_GENERATION_OPTIONS.verticalMirror);
+  const [removeBackgroundEnabled, setRemoveBackgroundEnabled] = useState<boolean>(DEFAULT_PATTERN_GENERATION_OPTIONS.autoRemoveBackground);
+  const [outlineEnabled, setOutlineEnabled] = useState<boolean>(DEFAULT_PATTERN_GENERATION_OPTIONS.outline);
   // 添加像素化模式状态
   const [pixelationMode, setPixelationMode] = useState<PixelationMode>(PixelationMode.Dominant); // 默认为卡通模式
   
@@ -580,14 +575,15 @@ export default function Home() {
     setSelectedPreset(
       PATTERN_PRESETS.find(preset => (
         preset.granularity === handoff.options.granularity &&
-        preset.maxColorCount === handoff.options.maxColorCount
+        preset.maxColorCount === handoff.options.maxColorCount &&
+        preset.similarityThreshold === handoff.options.similarityThreshold
       ))?.id ?? null
     );
-    setBrightness(0);
-    setIsHorizontalMirrored(false);
-    setIsVerticalMirrored(false);
-    setRemoveBackgroundEnabled(true);
-    setOutlineEnabled(false);
+    setBrightness(handoff.options.brightness);
+    setIsHorizontalMirrored(handoff.options.horizontalMirror);
+    setIsVerticalMirrored(handoff.options.verticalMirror);
+    setRemoveBackgroundEnabled(handoff.options.autoRemoveBackground);
+    setOutlineEnabled(handoff.options.outline);
     setPixelationMode(handoff.options.pixelationMode);
     setSelectedColorSystem(handoff.options.selectedColorSystem);
     setIsCustomPalette(false);
@@ -900,15 +896,15 @@ export default function Home() {
     setTotalBeadCount(0);
     setInitialGridColorKeys(new Set()); // ++ 重置初始键 ++
     // ++ 重置横轴格子数量为默认值 ++
-    setGranularity(DEFAULT_GRANULARITY);
-    setSimilarityThreshold(14);
-    setMaxColorCount(16);
+    setGranularity(DEFAULT_PATTERN_GENERATION_OPTIONS.granularity);
+    setSimilarityThreshold(DEFAULT_PATTERN_GENERATION_OPTIONS.similarityThreshold);
+    setMaxColorCount(DEFAULT_PATTERN_GENERATION_OPTIONS.maxColorCount);
     setSelectedPreset('balanced');
-    setBrightness(0);
-    setIsHorizontalMirrored(false);
-    setIsVerticalMirrored(false);
-    setRemoveBackgroundEnabled(true);
-    setOutlineEnabled(false);
+    setBrightness(DEFAULT_PATTERN_GENERATION_OPTIONS.brightness);
+    setIsHorizontalMirrored(DEFAULT_PATTERN_GENERATION_OPTIONS.horizontalMirror);
+    setIsVerticalMirrored(DEFAULT_PATTERN_GENERATION_OPTIONS.verticalMirror);
+    setRemoveBackgroundEnabled(DEFAULT_PATTERN_GENERATION_OPTIONS.autoRemoveBackground);
+    setOutlineEnabled(DEFAULT_PATTERN_GENERATION_OPTIONS.outline);
     setRemapTrigger(prev => prev + 1); // Trigger full remap for new image
     
     // 关闭裁剪弹窗
@@ -1478,9 +1474,13 @@ export default function Home() {
             granularity,
             similarityThreshold,
             maxColorCount,
+            brightness,
+            horizontalMirror: isHorizontalMirrored,
+            verticalMirror: isVerticalMirrored,
             pixelationMode,
             selectedColorSystem,
-            autoRemoveBackground: true,
+            autoRemoveBackground: removeBackgroundEnabled,
+            outline: outlineEnabled,
           },
           result: {
             mappedPixelData,

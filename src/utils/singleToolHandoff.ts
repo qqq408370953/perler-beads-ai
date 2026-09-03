@@ -1,6 +1,7 @@
 import { ColorSystem } from './colorSystemUtils';
 import { MappedPixel, PixelationMode } from './pixelation';
 import { PatternGenerationOptions, PatternGenerationResult } from './patternGenerator';
+import { normalizePatternGenerationOptions } from './patternGenerationOptions';
 
 const SINGLE_TOOL_HANDOFF_KEY = 'perlerBeadsSingleToolHandoff';
 
@@ -70,7 +71,11 @@ export function consumeSingleToolHandoff(): SingleToolHandoffPayload | null {
 
     localStorage.removeItem(SINGLE_TOOL_HANDOFF_KEY);
     const parsedValue: unknown = JSON.parse(rawValue);
-    return isValidPayload(parsedValue) ? parsedValue : null;
+    if (!isValidPayload(parsedValue)) return null;
+    return {
+      ...parsedValue,
+      options: normalizePatternGenerationOptions(parsedValue.options),
+    };
   } catch (error) {
     console.error('读取批量到单图精修数据失败:', error);
     localStorage.removeItem(SINGLE_TOOL_HANDOFF_KEY);

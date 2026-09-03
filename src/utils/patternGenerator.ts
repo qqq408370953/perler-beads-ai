@@ -4,7 +4,6 @@ import {
   hexToRgb,
   MappedPixel,
   PaletteColor,
-  PixelationMode,
   RgbColor,
 } from './pixelation';
 import {
@@ -12,21 +11,22 @@ import {
   removeIsolatedColorNoise,
 } from './patternColorProcessing';
 import {
-  ColorSystem,
   getMardToHexMapping,
   isColorAvailableInSystem,
 } from './colorSystemUtils';
-import { cropPixelDataToContent, TRANSPARENT_KEY, transparentColorData } from './pixelEditingUtils';
+import type { ColorSystem } from './colorSystemUtils';
+import { TRANSPARENT_KEY, transparentColorData } from './pixelEditingUtils';
 import { selectGenerationPalette } from './paletteSelection';
+import {
+  adjustPatternBrightness,
+  applyPatternMirrors,
+  applyPatternOutline,
+  normalizePatternGenerationOptions,
+  type PatternGenerationOptions,
+} from './patternGenerationOptions';
 
-export interface PatternGenerationOptions {
-  granularity: number;
-  similarityThreshold: number;
-  maxColorCount: number;
-  pixelationMode: PixelationMode;
-  selectedColorSystem: ColorSystem;
-  autoRemoveBackground: boolean;
-}
+export type { PatternGenerationOptions } from './patternGenerationOptions';
+export { DEFAULT_PATTERN_GENERATION_OPTIONS, normalizePatternGenerationOptions } from './patternGenerationOptions';
 
 export interface PatternGenerationResult {
   mappedPixelData: MappedPixel[][];
@@ -35,15 +35,6 @@ export interface PatternGenerationResult {
   totalBeadCount: number;
   colorCount: number;
 }
-
-export const DEFAULT_PATTERN_GENERATION_OPTIONS: PatternGenerationOptions = {
-  granularity: 85,
-  similarityThreshold: 12,
-  maxColorCount: 8,
-  pixelationMode: PixelationMode.Dominant,
-  selectedColorSystem: '通用221色',
-  autoRemoveBackground: true,
-};
 
 function buildFullHexBeadPalette(): PaletteColor[] {
   const mardToHexMapping = getMardToHexMapping();
@@ -326,7 +317,8 @@ export async function generatePatternFromImage(
   imageSrc: string,
   options: PatternGenerationOptions
 ): Promise<PatternGenerationResult> {
-  const palette = buildDefaultBeadPalette(options.selectedColorSystem);
+  const normalizedOptions = normalizePatternGenerationOptions(options);
+  const palette = buildDefaultBeadPalette(normalizedOptions.selectedColorSystem);
   if (palette.length === 0) {
     throw new Error('当前色板为空，无法生成图纸');
   }
@@ -341,7 +333,13 @@ export async function generatePatternFromImage(
   }
 
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const N = Math.min(300, Math.max(10, Math.round(options.granularity)));
+  if (normalizedOptions.brightness !== 0) {
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    imageData.data.set(adjustPatternBrightness(imageData.data, normalizedOptions.brightness));
+    ctx.putImageData(imageData, 0, 0);
+  }
+
+  const N = normalizedOptions.granularity;
   const aspectRatio = canvas.height / canvas.width;
   const M = Math.max(1, Math.round(N * aspectRatio));
   const dimensions = { N, M };
@@ -353,24 +351,38 @@ export async function generatePatternFromImage(
     N,
     M,
     palette,
-    options.pixelationMode,
+    normalizedOptions.pixelationMode,
     fallbackColor
   );
   const limitedData = preparePatternColors(initialData, dimensions, palette, {
-    similarityThreshold: options.similarityThreshold,
-    maxColorCount: options.maxColorCount,
+    similarityThreshold: normalizedOptions.similarityThreshold,
+    maxColorCount: normalizedOptions.maxColorCount,
   });
-  const backgroundRemovedData = await removeBackgroundFromPixelData(limitedData, dimensions, imageSrc);
-  const denoisedData = removeIsolatedColorNoise(backgroundRemovedData, dimensions, palette);
-  const {
-    mappedPixelData: finalData,
-    gridDimensions: croppedDimensions,
-  } = cropPixelDataToContent(denoisedData, 1);
+  let finalData = clonePixelData(limitedData);
+  let subjectSeparatedData: MappedPixel[][] | null = null;
+
+  if (normalizedOptions.autoRemoveBackground || normalizedOptions.outline) {
+    subjectSeparatedData = removeIsolatedColorNoise(
+      await removeBackgroundFromPixelData(limitedData, dimensions, imageSrc),
+      dimensions,
+      palette,
+    );
+  }
+
+  finalData = normalizedOptions.autoRemoveBackground && subjectSeparatedData
+    ? clonePixelData(subjectSeparatedData)
+    : removeIsolatedColorNoise(limitedData, dimensions, palette);
+
+  if (normalizedOptions.outline && subjectSeparatedData) {
+    finalData = applyPatternOutline(finalData, subjectSeparatedData, dimensions, palette);
+  }
+
+  finalData = applyPatternMirrors(finalData, normalizedOptions);
   const stats = calculatePatternStats(finalData);
 
   return {
     mappedPixelData: finalData,
-    gridDimensions: croppedDimensions,
+    gridDimensions: dimensions,
     ...stats,
   };
 }
