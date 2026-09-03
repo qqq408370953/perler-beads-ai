@@ -24,6 +24,8 @@ import {
 import {
   POSTER_HEIGHT,
   POSTER_WIDTH,
+  applyPosterSourceNamePreference,
+  buildPosterTextGlyphs,
   buildPosterBaseLayers,
   classicPosterPresets,
   getReadablePosterTextColors,
@@ -33,6 +35,7 @@ import {
   type PosterLayerTransform,
   type PosterLayoutMode,
   type PosterTextStyleOverride,
+  type ResolvedPosterTextStyle,
 } from '../../utils/posterLayout';
 
 type ItemStatus = 'idle' | 'processing' | 'done' | 'error';
@@ -129,46 +132,86 @@ function drawTextFit(
   maxWidth: number,
   startSize: number,
   minSize: number,
-  family: string,
-  fill: string,
-  stroke?: { color: string; width: number },
-  weight = 900,
-  letterSpacing = 0,
-  gradientColors?: [string, string, string],
-  shadow?: { color: string; blur: number; offsetX: number; offsetY: number }
+  style: ResolvedPosterTextStyle
 ) {
+  const characters = Array.from(text);
+  const measureLine = () => characters.reduce(
+    (width, character, index) => width + ctx.measureText(character).width + (index ? style.letterSpacing : 0),
+    0
+  );
   let size = startSize;
   do {
-    ctx.font = `${weight} ${size}px ${family}`;
-    if ('letterSpacing' in ctx) ctx.letterSpacing = `${letterSpacing}px`;
-    if (ctx.measureText(text).width <= maxWidth || size <= minSize) break;
+    ctx.font = `${style.fontWeight} ${size}px ${style.fontFamily}`;
+    const skewAllowance = Math.abs(Math.tan((style.skewX * Math.PI) / 180)) * size * style.scaleY;
+    if (measureLine() * style.scaleX + skewAllowance <= maxWidth || size <= minSize) break;
     size -= 2;
   } while (size > minSize);
 
+  const glyphs = buildPosterTextGlyphs(text, style);
+  const glyphWidths = glyphs.map((glyph) => ctx.measureText(glyph.char).width);
+  const textWidth = glyphWidths.reduce((total, width) => total + width, 0)
+    + Math.max(0, glyphs.length - 1) * style.letterSpacing;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.transform(1, 0, Math.tan((style.skewX * Math.PI) / 180), 1, 0, 0);
+  ctx.scale(style.scaleX, style.scaleY);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
-  if (shadow) {
-    ctx.shadowColor = shadow.color;
-    ctx.shadowBlur = shadow.blur;
-    ctx.shadowOffsetX = shadow.offsetX;
-    ctx.shadowOffsetY = shadow.offsetY;
-  }
-  if (stroke) {
-    ctx.strokeStyle = stroke.color;
-    ctx.lineWidth = stroke.width;
-    ctx.strokeText(text, x, y);
-  }
-  if (gradientColors) {
-    const gradient = ctx.createLinearGradient(x - maxWidth / 2, y, x + maxWidth / 2, y);
-    gradient.addColorStop(0, gradientColors[0]);
-    gradient.addColorStop(0.5, gradientColors[1]);
-    gradient.addColorStop(1, gradientColors[2]);
-    ctx.fillStyle = gradient;
-  } else {
-    ctx.fillStyle = fill;
-  }
-  ctx.fillText(text, x, y);
+
+  let cursorX = -textWidth / 2;
+  glyphs.forEach((glyph, index) => {
+    const glyphX = cursorX + glyphWidths[index] / 2;
+    cursorX += glyphWidths[index] + style.letterSpacing;
+    ctx.save();
+    ctx.translate(glyphX, glyph.offsetY);
+    ctx.rotate((glyph.rotation * Math.PI) / 180);
+    ctx.scale(1, glyph.scaleY);
+
+    if (style.extrusionDepth > 0) {
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = style.extrusionColor;
+      ctx.fillStyle = style.extrusionColor;
+      ctx.lineWidth = style.strokeEnabled ? style.strokeWidth : 2;
+      for (let offset = style.extrusionDepth; offset >= 1; offset -= 1) {
+        const offsetX = offset * 0.7;
+        if (style.strokeEnabled) ctx.strokeText(glyph.char, offsetX, offset);
+        ctx.fillText(glyph.char, offsetX, offset);
+      }
+    }
+
+    if (style.shadow) {
+      ctx.shadowColor = style.shadow.color;
+      ctx.shadowBlur = style.shadow.blur;
+      ctx.shadowOffsetX = style.shadow.offsetX;
+      ctx.shadowOffsetY = style.shadow.offsetY;
+    }
+    if (style.strokeEnabled) {
+      ctx.strokeStyle = style.strokeColor;
+      ctx.lineWidth = style.strokeWidth;
+      ctx.strokeText(glyph.char, 0, 0);
+    }
+    if (style.fillMode === 'characters') {
+      const gradient = ctx.createLinearGradient(0, -size / 2, 0, size / 2);
+      gradient.addColorStop(0, glyph.gradient[0]);
+      gradient.addColorStop(0.52, glyph.gradient[1]);
+      gradient.addColorStop(1, glyph.gradient[2]);
+      ctx.fillStyle = gradient;
+    } else if (style.gradient) {
+      const gradient = ctx.createLinearGradient(0, -size / 2, 0, size / 2);
+      gradient.addColorStop(0, style.gradient[0]);
+      gradient.addColorStop(0.52, style.gradient[1]);
+      gradient.addColorStop(1, style.gradient[2]);
+      ctx.fillStyle = gradient;
+    } else {
+      ctx.fillStyle = style.fill;
+    }
+    ctx.fillText(glyph.char, 0, 0);
+    ctx.restore();
+  });
+  ctx.restore();
 }
 
 function drawContainImage(
@@ -275,15 +318,7 @@ async function renderPosterCanvas(
         layer.width,
         layer.textStyle.fontSize,
         layer.textStyle.minFontSize,
-        textStyle.fontFamily,
-        textStyle.fill,
-        textStyle.strokeEnabled
-          ? { color: textStyle.strokeColor, width: textStyle.strokeWidth }
-          : undefined,
-        textStyle.fontWeight,
-        textStyle.letterSpacing,
-        textStyle.gradient,
-        textStyle.shadow
+        textStyle
       );
     }
     ctx.restore();
@@ -306,6 +341,7 @@ export default function PosterPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [items, setItems] = useState<PosterItem[]>([]);
+  const [useSourceNames, setUseSourceNames] = useState(true);
   const [settings, setSettings] = useState<PosterSettings>(defaultSettings);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -371,12 +407,13 @@ export default function PosterPage() {
     const nextItems = await Promise.all(
       imageFiles.map(async (file): Promise<PosterItem> => {
         const dataUrl = await readFileAsDataUrl(file);
+        const sourceName = stripFileExtension(file.name);
         return {
           id: createId(),
           originalSrc: dataUrl,
           processedSrc: dataUrl,
-          label: '',
-          sourceName: stripFileExtension(file.name),
+          label: useSourceNames ? sourceName : '',
+          sourceName,
           status: 'idle',
           progressText: '待处理',
           progress: 0,
@@ -386,7 +423,7 @@ export default function PosterPage() {
     );
 
     setItems((prev) => [...prev, ...nextItems]);
-  }, []);
+  }, [useSourceNames]);
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) {
@@ -479,6 +516,11 @@ export default function PosterPage() {
 
   const updateItemLabel = (id: string, label: string) => {
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, label } : item)));
+  };
+
+  const updateUseSourceNames = (enabled: boolean) => {
+    setUseSourceNames(enabled);
+    setItems((prev) => applyPosterSourceNamePreference(prev, enabled));
   };
 
   const removeItem = (id: string) => {
@@ -821,6 +863,26 @@ export default function PosterPage() {
                 </button>
               )}
             </div>
+
+            <button
+              type="button"
+              role="switch"
+              aria-checked={useSourceNames}
+              onClick={() => updateUseSourceNames(!useSourceNames)}
+              className="mt-3 flex min-h-12 w-full items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left"
+            >
+              <span>
+                <span className="block text-sm font-bold text-slate-800">使用原图片名称</span>
+                <span className="mt-0.5 block text-xs leading-5 text-slate-500">
+                  {useSourceNames
+                    ? '已自动填入名称，并显示在封面中'
+                    : '仅作为输入提示，不会写入封面'}
+                </span>
+              </span>
+              <span className={`relative h-7 w-12 shrink-0 rounded-full transition ${useSourceNames ? 'bg-orange-500' : 'bg-slate-300'}`}>
+                <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition ${useSourceNames ? 'left-6' : 'left-1'}`} />
+              </span>
+            </button>
 
             <div className="mt-3 max-h-none space-y-3 overflow-visible pr-0 xl:max-h-[calc(100vh-150px)] xl:overflow-auto xl:pr-1">
               {items.length === 0 && (

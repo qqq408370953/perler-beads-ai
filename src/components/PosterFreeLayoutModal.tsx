@@ -2,11 +2,13 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   POSTER_HEIGHT,
   POSTER_WIDTH,
   applyPosterTextStyleToAll,
+  buildPosterTextGlyphs,
+  buildPosterTextPaintLayers,
   constrainPosterTransform,
   mergePosterLayerTransforms,
   movePosterLayer,
@@ -16,6 +18,8 @@ import {
   updatePosterTextStyleOverride,
   type PosterBaseLayer,
   type PosterLayerTransform,
+  type ResolvedPosterTextStyle,
+  type PosterTextFillMode,
   type PosterTextStyleOverride,
 } from '../utils/posterLayout';
 
@@ -68,6 +72,41 @@ function angleToCenter(event: PointerEvent, transform: PosterLayerTransform, rec
 
 function colorInputValue(value: string, fallback: string) {
   return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+}
+
+function toContainerWidthUnit(value: number) {
+  return `${(value / POSTER_WIDTH) * 100}cqw`;
+}
+
+function buildDomTextShadow(
+  style: ResolvedPosterTextStyle,
+  includeExtrusion = true
+): string | undefined {
+  const shadows: string[] = [];
+  if (includeExtrusion) {
+    for (let offset = 2; offset <= style.extrusionDepth; offset += 2) {
+      shadows.push(`${toContainerWidthUnit(offset * 0.7)} ${toContainerWidthUnit(offset)} 0 ${style.extrusionColor}`);
+    }
+  }
+  if (style.shadow) {
+    shadows.push(
+      `${toContainerWidthUnit(style.shadow.offsetX)} ${toContainerWidthUnit(style.shadow.offsetY)} ${toContainerWidthUnit(style.shadow.blur)} ${style.shadow.color}`
+    );
+  }
+  return shadows.length ? shadows.join(', ') : undefined;
+}
+
+function getSharedTextPaint(
+  style: ResolvedPosterTextStyle,
+  includeExtrusion = true
+): CSSProperties {
+  return {
+    WebkitTextStroke: style.strokeEnabled
+      ? `${toContainerWidthUnit(style.strokeWidth)} ${style.strokeColor}`
+      : undefined,
+    textShadow: buildDomTextShadow(style, includeExtrusion),
+    paintOrder: 'stroke fill',
+  };
 }
 
 export default function PosterFreeLayoutModal({
@@ -318,6 +357,12 @@ export default function PosterFreeLayoutModal({
               const textStyle = layer.textStyle
                 ? resolvePosterTextStyle(layer, textStyles)
                 : null;
+              const textGlyphs = layer.text && textStyle?.fillMode === 'characters'
+                ? buildPosterTextGlyphs(layer.text, textStyle)
+                : null;
+              const textPaintLayers = textStyle && textGlyphs
+                ? buildPosterTextPaintLayers(textStyle)
+                : null;
               return (
                 <div
                   key={layer.id}
@@ -346,28 +391,74 @@ export default function PosterFreeLayoutModal({
                     />
                   ) : (
                     <div
-                      className="pointer-events-none flex h-full w-full items-center justify-center overflow-hidden whitespace-nowrap text-center leading-none"
+                      className="pointer-events-none flex h-full w-full items-center justify-center whitespace-nowrap text-center leading-none"
                       style={{
-                        color: textStyle?.gradient ? 'transparent' : textStyle?.fill,
-                        backgroundImage: textStyle?.gradient
-                          ? `linear-gradient(90deg, ${textStyle.gradient.join(', ')})`
-                          : undefined,
-                        backgroundClip: textStyle?.gradient ? 'text' : undefined,
-                        WebkitBackgroundClip: textStyle?.gradient ? 'text' : undefined,
                         fontFamily: textStyle?.fontFamily,
                         fontWeight: textStyle?.fontWeight,
                         fontSize: `${((layer.textStyle?.fontSize ?? 24) / POSTER_WIDTH) * 100}cqw`,
                         letterSpacing: `${((textStyle?.letterSpacing ?? 0) / POSTER_WIDTH) * 100}cqw`,
-                        WebkitTextStroke: textStyle?.strokeEnabled
-                          ? `${(textStyle.strokeWidth / POSTER_WIDTH) * 100}cqw ${textStyle.strokeColor}`
-                          : undefined,
-                        textShadow: textStyle?.shadow
-                          ? `${(textStyle.shadow.offsetX / POSTER_WIDTH) * 100}cqw ${(textStyle.shadow.offsetY / POSTER_WIDTH) * 100}cqw ${(textStyle.shadow.blur / POSTER_WIDTH) * 100}cqw ${textStyle.shadow.color}`
-                          : undefined,
-                        paintOrder: 'stroke fill',
                       }}
                     >
-                      {layer.text}
+                      {textStyle && (
+                        <span
+                          className="inline-flex items-center justify-center"
+                          style={{
+                            transform: `skewX(${textStyle.skewX}deg) scale(${textStyle.scaleX}, ${textStyle.scaleY})`,
+                            transformOrigin: 'center',
+                            color: textStyle.gradient ? 'transparent' : textStyle.fill,
+                            backgroundImage: textStyle.gradient
+                              ? `linear-gradient(180deg, ${textStyle.gradient.join(', ')})`
+                              : undefined,
+                            backgroundClip: textStyle.gradient ? 'text' : undefined,
+                            WebkitBackgroundClip: textStyle.gradient ? 'text' : undefined,
+                            ...(textGlyphs ? {} : getSharedTextPaint(textStyle)),
+                          }}
+                        >
+                          {textGlyphs
+                            ? textGlyphs.map((glyph, index) => (
+                                <span
+                                  key={`${glyph.char}-${index}`}
+                                  className="relative inline-block"
+                                  style={{
+                                    transform: `translateY(${toContainerWidthUnit(glyph.offsetY)}) rotate(${glyph.rotation}deg) scaleY(${glyph.scaleY})`,
+                                    transformOrigin: 'center',
+                                  }}
+                                >
+                                  {textPaintLayers?.map((paintLayer) => (
+                                    <span
+                                      key={paintLayer.role}
+                                      aria-hidden={paintLayer.role === 'face' ? undefined : true}
+                                      className={paintLayer.role === 'face' ? 'relative z-20 inline-block' : 'absolute inset-0'}
+                                      style={paintLayer.role === 'face'
+                                        ? {
+                                            color: glyph.fill,
+                                            WebkitTextFillColor: 'transparent',
+                                            WebkitTextStroke: '0 transparent',
+                                            backgroundImage: `linear-gradient(180deg, ${glyph.gradient.join(', ')})`,
+                                            backgroundClip: 'text',
+                                            WebkitBackgroundClip: 'text',
+                                          }
+                                        : {
+                                            color: paintLayer.fill,
+                                            WebkitTextFillColor: paintLayer.fill,
+                                            WebkitTextStroke: paintLayer.strokeWidth > 0
+                                              ? `${toContainerWidthUnit(paintLayer.strokeWidth)} ${paintLayer.strokeColor}`
+                                              : undefined,
+                                            textShadow: paintLayer.role === 'outline'
+                                              ? buildDomTextShadow(textStyle, false)
+                                              : undefined,
+                                            transform: `translate(${toContainerWidthUnit(paintLayer.offsetX)}, ${toContainerWidthUnit(paintLayer.offsetY)})`,
+                                            zIndex: paintLayer.role === 'extrusion' ? 0 : 10,
+                                          }}
+                                    >
+                                      {glyph.char}
+                                    </span>
+                                  ))}
+                                </span>
+                              ))
+                            : layer.text}
+                        </span>
+                      )}
                     </div>
                   )}
                   {isSelected && (
@@ -440,7 +531,7 @@ export default function PosterFreeLayoutModal({
 
                   <div className="grid grid-cols-2 gap-2">
                     <label className="text-xs font-bold text-slate-300">
-                      文字颜色
+                      主颜色
                       <input
                         type="color"
                         value={colorInputValue(selectedTextStyle.fill, '#FFFFFF')}
@@ -459,6 +550,42 @@ export default function PosterFreeLayoutModal({
                       />
                     </label>
                   </div>
+
+                  <label className="block text-xs font-bold text-slate-300">
+                    填充方式
+                    <select
+                      value={selectedTextStyle.fillMode}
+                      onChange={(event) => updateSelectedTextStyle({ fillMode: event.target.value as PosterTextFillMode })}
+                      className="mt-2 min-h-10 w-full rounded-lg border border-white/20 bg-slate-800 px-2 text-sm text-white"
+                    >
+                      <option value="solid">单色</option>
+                      <option value="gradient">三色渐变</option>
+                      <option value="characters">逐字配色</option>
+                    </select>
+                  </label>
+
+                  {selectedTextStyle.fillMode !== 'solid' && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-xs font-bold text-slate-300">
+                        第二颜色
+                        <input
+                          type="color"
+                          value={colorInputValue(selectedTextStyle.fillSecondary, '#FF861A')}
+                          onChange={(event) => updateSelectedTextStyle({ fillSecondary: event.target.value })}
+                          className="mt-2 h-10 w-full rounded-lg border border-white/20 bg-transparent"
+                        />
+                      </label>
+                      <label className="text-xs font-bold text-slate-300">
+                        第三颜色
+                        <input
+                          type="color"
+                          value={colorInputValue(selectedTextStyle.fillTertiary, '#F23A20')}
+                          onChange={(event) => updateSelectedTextStyle({ fillTertiary: event.target.value })}
+                          className="mt-2 h-10 w-full rounded-lg border border-white/20 bg-transparent"
+                        />
+                      </label>
+                    </div>
+                  )}
 
                   <label className="flex min-h-10 items-center justify-between rounded-lg border border-white/15 px-3 text-xs font-bold text-slate-300">
                     <span>开启描边</span>
@@ -522,6 +649,113 @@ export default function PosterFreeLayoutModal({
                       />
                     </label>
                   </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block text-xs font-bold text-slate-300">
+                      横向拉伸 {selectedTextStyle.scaleX.toFixed(2)}
+                      <input
+                        type="range"
+                        min="0.6"
+                        max="1.6"
+                        step="0.02"
+                        value={selectedTextStyle.scaleX}
+                        onChange={(event) => updateSelectedTextStyle({ scaleX: Number(event.target.value) })}
+                        className="mt-3 w-full accent-orange-500"
+                      />
+                    </label>
+                    <label className="block text-xs font-bold text-slate-300">
+                      纵向拉伸 {selectedTextStyle.scaleY.toFixed(2)}
+                      <input
+                        type="range"
+                        min="0.6"
+                        max="1.4"
+                        step="0.02"
+                        value={selectedTextStyle.scaleY}
+                        onChange={(event) => updateSelectedTextStyle({ scaleY: Number(event.target.value) })}
+                        className="mt-3 w-full accent-orange-500"
+                      />
+                    </label>
+                  </div>
+
+                  <label className="block text-xs font-bold text-slate-300">
+                    文字倾斜 {selectedTextStyle.skewX}°
+                    <input
+                      type="range"
+                      min="-20"
+                      max="20"
+                      step="1"
+                      value={selectedTextStyle.skewX}
+                      onChange={(event) => updateSelectedTextStyle({ skewX: Number(event.target.value) })}
+                      className="mt-2 w-full accent-orange-500"
+                    />
+                  </label>
+
+                  <div>
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-300">
+                      <span>标题弧度</span>
+                      <span>{selectedTextStyle.curve > 0 ? `拱形 +${selectedTextStyle.curve}` : selectedTextStyle.curve < 0 ? `下弧 ${selectedTextStyle.curve}` : '直线'}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="-160"
+                      max="160"
+                      step="4"
+                      value={selectedTextStyle.curve}
+                      onChange={(event) => updateSelectedTextStyle({ curve: Number(event.target.value) })}
+                      className="mt-2 w-full accent-orange-500"
+                    />
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {([[-70, '下弧'], [0, '直线'], [70, '拱形']] as const).map(([curve, label]) => (
+                        <button
+                          key={label}
+                          type="button"
+                          onClick={() => updateSelectedTextStyle({ curve })}
+                          className={`min-h-9 rounded-lg border px-2 text-xs font-bold ${selectedTextStyle.curve === curve ? 'border-orange-400 bg-orange-500 text-white' : 'border-white/20 text-slate-200 hover:bg-white/10'}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-[1fr_84px] gap-2">
+                    <label className="block text-xs font-bold text-slate-300">
+                      立体厚度 {selectedTextStyle.extrusionDepth}px
+                      <input
+                        type="range"
+                        min="0"
+                        max="24"
+                        step="1"
+                        value={selectedTextStyle.extrusionDepth}
+                        onChange={(event) => updateSelectedTextStyle({ extrusionDepth: Number(event.target.value) })}
+                        className="mt-3 w-full accent-orange-500"
+                      />
+                    </label>
+                    <label className="text-xs font-bold text-slate-300">
+                      立体颜色
+                      <input
+                        type="color"
+                        value={colorInputValue(selectedTextStyle.extrusionColor, '#111111')}
+                        onChange={(event) => updateSelectedTextStyle({ extrusionColor: event.target.value })}
+                        disabled={selectedTextStyle.extrusionDepth === 0}
+                        className="mt-2 h-10 w-full rounded-lg border border-white/20 bg-transparent disabled:opacity-35"
+                      />
+                    </label>
+                  </div>
+
+                  <label className={`block text-xs font-bold text-slate-300 ${selectedTextStyle.fillMode === 'characters' ? '' : 'opacity-40'}`}>
+                    单字节奏 {selectedTextStyle.characterRhythm}
+                    <input
+                      type="range"
+                      min="0"
+                      max="10"
+                      step="1"
+                      value={selectedTextStyle.characterRhythm}
+                      onChange={(event) => updateSelectedTextStyle({ characterRhythm: Number(event.target.value) })}
+                      disabled={selectedTextStyle.fillMode !== 'characters'}
+                      className="mt-2 w-full accent-orange-500"
+                    />
+                  </label>
 
                   <div className="grid grid-cols-2 gap-2">
                     <button

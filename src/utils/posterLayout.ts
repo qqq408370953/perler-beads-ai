@@ -38,11 +38,15 @@ export interface PosterTextStyle {
   stroke?: { color: string; width: number };
 }
 
-export type PosterTextEffect = 'none' | 'outline' | 'candy' | 'neon' | 'dimensional' | 'gold';
+export type PosterTextEffect = 'none' | 'outline' | 'candy' | 'neon' | 'dimensional' | 'gold' | 'comic';
+export type PosterTextFillMode = 'solid' | 'gradient' | 'characters';
 
 export interface PosterTextStyleOverride {
   id: string;
+  fillMode: PosterTextFillMode;
   fill: string;
+  fillSecondary: string;
+  fillTertiary: string;
   strokeEnabled: boolean;
   strokeColor: string;
   strokeWidth: number;
@@ -50,11 +54,37 @@ export interface PosterTextStyleOverride {
   fontWeight: number;
   letterSpacing: number;
   effect: PosterTextEffect;
+  scaleX: number;
+  scaleY: number;
+  skewX: number;
+  extrusionDepth: number;
+  extrusionColor: string;
+  characterRhythm: number;
+  curve: number;
 }
 
 export interface ResolvedPosterTextStyle extends PosterTextStyleOverride {
   gradient?: [string, string, string];
+  characterPalette?: [string, string, string];
   shadow?: { color: string; blur: number; offsetX: number; offsetY: number };
+}
+
+export interface PosterTextGlyph {
+  char: string;
+  fill: string;
+  gradient: [string, string, string];
+  offsetY: number;
+  rotation: number;
+  scaleY: number;
+}
+
+export interface PosterTextPaintLayer {
+  role: 'extrusion' | 'outline' | 'face';
+  fill: string;
+  strokeColor: string;
+  strokeWidth: number;
+  offsetX: number;
+  offsetY: number;
 }
 
 export interface PosterBaseLayer {
@@ -114,12 +144,13 @@ export const posterTextEffectPresets: Array<{
   name: string;
   patch: Partial<Omit<PosterTextStyleOverride, 'id'>>;
 }> = [
-  { id: 'none', name: '无', patch: { effect: 'none' } },
-  { id: 'outline', name: '白字黑边', patch: { effect: 'outline', fill: '#FFFFFF', strokeEnabled: true, strokeColor: '#111111', strokeWidth: 10 } },
-  { id: 'candy', name: '糖果渐变', patch: { effect: 'candy', fill: '#FF5E93', strokeEnabled: true, strokeColor: '#8F1D5C', strokeWidth: 7 } },
-  { id: 'neon', name: '霓虹发光', patch: { effect: 'neon', fill: '#FFFFFF', strokeEnabled: true, strokeColor: '#7C3AED', strokeWidth: 5 } },
-  { id: 'dimensional', name: '立体投影', patch: { effect: 'dimensional', fill: '#FFF7ED', strokeEnabled: true, strokeColor: '#3F2D20', strokeWidth: 6 } },
-  { id: 'gold', name: '金色质感', patch: { effect: 'gold', fill: '#F5C04A', strokeEnabled: true, strokeColor: '#6B3A00', strokeWidth: 6 } },
+  { id: 'none', name: '无', patch: { effect: 'none', fillMode: 'solid', scaleX: 1, scaleY: 1, skewX: 0, extrusionDepth: 0, characterRhythm: 0, curve: 0 } },
+  { id: 'outline', name: '白字黑边', patch: { effect: 'outline', fillMode: 'solid', fill: '#FFFFFF', strokeEnabled: true, strokeColor: '#111111', strokeWidth: 10, scaleX: 1, scaleY: 1, skewX: 0, extrusionDepth: 0, characterRhythm: 0, curve: 0 } },
+  { id: 'candy', name: '糖果渐变', patch: { effect: 'candy', fillMode: 'gradient', fill: '#FFF1A8', fillSecondary: '#FF7DB2', fillTertiary: '#FF3D81', strokeEnabled: true, strokeColor: '#8F1D5C', strokeWidth: 7, scaleX: 1, scaleY: 1, skewX: 0, extrusionDepth: 0, characterRhythm: 0, curve: 0 } },
+  { id: 'neon', name: '霓虹发光', patch: { effect: 'neon', fillMode: 'solid', fill: '#FFFFFF', strokeEnabled: true, strokeColor: '#7C3AED', strokeWidth: 5, scaleX: 1, scaleY: 1, skewX: 0, extrusionDepth: 0, characterRhythm: 0, curve: 0 } },
+  { id: 'dimensional', name: '立体投影', patch: { effect: 'dimensional', fillMode: 'solid', fill: '#FFF7ED', strokeEnabled: true, strokeColor: '#3F2D20', strokeWidth: 6, scaleX: 1, scaleY: 1, skewX: 0, extrusionDepth: 10, extrusionColor: '#281C14', characterRhythm: 0, curve: 0 } },
+  { id: 'gold', name: '金色质感', patch: { effect: 'gold', fillMode: 'gradient', fill: '#FFF7BF', fillSecondary: '#F5C04A', fillTertiary: '#A85D00', strokeEnabled: true, strokeColor: '#6B3A00', strokeWidth: 6, scaleX: 1, scaleY: 1, skewX: 0, extrusionDepth: 0, characterRhythm: 0, curve: 0 } },
+  { id: 'comic', name: '热血漫画', patch: { effect: 'comic', fillMode: 'characters', fill: '#FFD62F', fillSecondary: '#FF861A', fillTertiary: '#F23A20', strokeEnabled: true, strokeColor: '#111111', strokeWidth: 9, fontFamily: 'Arial Black, PingFang SC, Microsoft YaHei, sans-serif', fontWeight: 900, letterSpacing: -2, scaleX: 1.08, scaleY: 0.98, skewX: -4, extrusionDepth: 6, extrusionColor: '#111111', characterRhythm: 2, curve: 0 } },
 ];
 
 interface PosterLayout {
@@ -177,6 +208,15 @@ function getImageBounds(layout: PosterLayout, cellWidth: number, cellHeight: num
 export function stripFileExtension(fileName: string): string {
   const lastDot = fileName.lastIndexOf('.');
   return lastDot > 0 ? fileName.slice(0, lastDot) : fileName;
+}
+
+export function applyPosterSourceNamePreference<
+  T extends { sourceName: string; label: string }
+>(items: T[], enabled: boolean): T[] {
+  return items.map((item) => ({
+    ...item,
+    label: enabled ? item.sourceName.trim() : '',
+  }));
 }
 
 export function buildPosterBaseLayers(
@@ -272,7 +312,10 @@ function getDefaultPosterTextStyle(layer: PosterBaseLayer): PosterTextStyleOverr
   }
   return {
     id: layer.id,
+    fillMode: 'solid',
     fill: style.fill,
+    fillSecondary: style.fill,
+    fillTertiary: style.fill,
     strokeEnabled: Boolean(style.stroke),
     strokeColor: style.stroke?.color ?? '#111111',
     strokeWidth: style.stroke?.width ?? 6,
@@ -280,6 +323,34 @@ function getDefaultPosterTextStyle(layer: PosterBaseLayer): PosterTextStyleOverr
     fontWeight: style.weight,
     letterSpacing: 0,
     effect: 'none',
+    scaleX: 1,
+    scaleY: 1,
+    skewX: 0,
+    extrusionDepth: 0,
+    extrusionColor: '#111111',
+    characterRhythm: 0,
+    curve: 0,
+  };
+}
+
+function normalizePosterTextStyle(
+  layer: PosterBaseLayer,
+  style: PosterTextStyleOverride
+): PosterTextStyleOverride {
+  const defaults = getDefaultPosterTextStyle(layer);
+  return {
+    ...defaults,
+    ...style,
+    fillMode: style.fillMode ?? defaults.fillMode,
+    fillSecondary: style.fillSecondary ?? style.fill ?? defaults.fillSecondary,
+    fillTertiary: style.fillTertiary ?? style.fill ?? defaults.fillTertiary,
+    scaleX: style.scaleX ?? 1,
+    scaleY: style.scaleY ?? 1,
+    skewX: style.skewX ?? 0,
+    extrusionDepth: style.extrusionDepth ?? 0,
+    extrusionColor: style.extrusionColor ?? '#111111',
+    characterRhythm: style.characterRhythm ?? 0,
+    curve: style.curve ?? 0,
   };
 }
 
@@ -287,11 +358,22 @@ export function resolvePosterTextStyle(
   layer: PosterBaseLayer,
   overrides: PosterTextStyleOverride[]
 ): ResolvedPosterTextStyle {
-  const style = overrides.find((item) => item.id === layer.id) ?? getDefaultPosterTextStyle(layer);
+  const stored = overrides.find((item) => item.id === layer.id) ?? getDefaultPosterTextStyle(layer);
+  const style = normalizePosterTextStyle(layer, stored);
+  const fillEffects = style.fillMode === 'gradient'
+    ? { gradient: [style.fill, style.fillSecondary, style.fillTertiary] as [string, string, string] }
+    : style.fillMode === 'characters'
+      ? { characterPalette: [style.fill, style.fillSecondary, style.fillTertiary] as [string, string, string] }
+      : {};
+  const usesLegacyGradientDefaults = style.fillMode === 'solid'
+    && style.fillSecondary === style.fill
+    && style.fillTertiary === style.fill;
   if (style.effect === 'candy') {
     return {
       ...style,
-      gradient: ['#FFF1A8', '#FF7DB2', '#FF3D81'],
+      ...(usesLegacyGradientDefaults
+        ? { gradient: ['#FFF1A8', '#FF7DB2', '#FF3D81'] as [string, string, string] }
+        : fillEffects),
       shadow: { color: 'rgba(143, 29, 92, 0.38)', blur: 5, offsetX: 4, offsetY: 6 },
     };
   }
@@ -310,11 +392,92 @@ export function resolvePosterTextStyle(
   if (style.effect === 'gold') {
     return {
       ...style,
-      gradient: ['#FFF7BF', '#F5C04A', '#A85D00'],
+      ...(usesLegacyGradientDefaults
+        ? { gradient: ['#FFF7BF', '#F5C04A', '#A85D00'] as [string, string, string] }
+        : fillEffects),
       shadow: { color: 'rgba(91, 48, 0, 0.55)', blur: 8, offsetX: 7, offsetY: 9 },
     };
   }
-  return { ...style };
+  return { ...style, ...fillEffects };
+}
+
+function mixHexColor(color: string, target: string, amount: number): string {
+  const parse = (value: string) => /^#[0-9a-f]{6}$/i.test(value)
+    ? [1, 3, 5].map((start) => Number.parseInt(value.slice(start, start + 2), 16))
+    : null;
+  const sourceRgb = parse(color);
+  const targetRgb = parse(target);
+  if (!sourceRgb || !targetRgb) return color;
+  const mixed = sourceRgb.map((channel, index) =>
+    Math.round(channel + (targetRgb[index] - channel) * amount)
+  );
+  return `#${mixed.map((channel) => channel.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+}
+
+export function buildPosterTextGlyphs(
+  text: string,
+  style: Pick<ResolvedPosterTextStyle, 'fillMode' | 'fill' | 'fillSecondary' | 'fillTertiary' | 'characterRhythm' | 'curve'>
+): PosterTextGlyph[] {
+  const characters = Array.from(text);
+  const palette = [style.fill, style.fillSecondary, style.fillTertiary] as const;
+  const offsetPattern = [0, -0.7, 0.4, -0.35, 0.65, -0.2];
+  const rotationPattern = [-0.3, 0.45, -0.2, 0.3, -0.4, 0.15];
+  const heightPattern = [0.025, -0.035, 0.045, -0.02, 0.035, -0.03];
+
+  return characters.map((char, index) => {
+    const paletteIndex = style.fillMode === 'characters' && characters.length > 1
+      ? Math.min(2, Math.floor((index * 3) / characters.length))
+      : 0;
+    const fill = palette[paletteIndex];
+    const rhythm = style.characterRhythm;
+    const arcPosition = characters.length > 1 ? (index / (characters.length - 1)) * 2 - 1 : 0;
+    const curve = style.curve ?? 0;
+    const arcOffset = curve * (arcPosition * arcPosition - 0.5);
+    const arcRotation = arcPosition * curve * 0.22;
+    return {
+      char,
+      fill,
+      gradient: [mixHexColor(fill, '#FFFFFF', 0.32), fill, mixHexColor(fill, '#000000', 0.12)],
+      offsetY: offsetPattern[index % offsetPattern.length] * rhythm + arcOffset,
+      rotation: rotationPattern[index % rotationPattern.length] * rhythm + arcRotation,
+      scaleY: 1 + heightPattern[index % heightPattern.length] * rhythm,
+    };
+  });
+}
+
+export function buildPosterTextPaintLayers(
+  style: Pick<ResolvedPosterTextStyle, 'strokeEnabled' | 'strokeColor' | 'strokeWidth' | 'extrusionDepth' | 'extrusionColor'>
+): PosterTextPaintLayer[] {
+  const layers: PosterTextPaintLayer[] = [];
+  if (style.extrusionDepth > 0) {
+    layers.push({
+      role: 'extrusion',
+      fill: style.extrusionColor,
+      strokeColor: style.extrusionColor,
+      strokeWidth: style.strokeEnabled ? style.strokeWidth : 0,
+      offsetX: style.extrusionDepth * 0.7,
+      offsetY: style.extrusionDepth,
+    });
+  }
+  if (style.strokeEnabled) {
+    layers.push({
+      role: 'outline',
+      fill: style.strokeColor,
+      strokeColor: style.strokeColor,
+      strokeWidth: style.strokeWidth,
+      offsetX: 0,
+      offsetY: 0,
+    });
+  }
+  layers.push({
+    role: 'face',
+    fill: 'currentColor',
+    strokeColor: 'transparent',
+    strokeWidth: 0,
+    offsetX: 0,
+    offsetY: 0,
+  });
+  return layers;
 }
 
 export function updatePosterTextStyleOverride(
@@ -325,7 +488,10 @@ export function updatePosterTextStyleOverride(
   const current = resolvePosterTextStyle(layer, overrides);
   const next: PosterTextStyleOverride = {
     id: layer.id,
+    fillMode: current.fillMode,
     fill: current.fill,
+    fillSecondary: current.fillSecondary,
+    fillTertiary: current.fillTertiary,
     strokeEnabled: current.strokeEnabled,
     strokeColor: current.strokeColor,
     strokeWidth: current.strokeWidth,
@@ -333,6 +499,13 @@ export function updatePosterTextStyleOverride(
     fontWeight: current.fontWeight,
     letterSpacing: current.letterSpacing,
     effect: current.effect,
+    scaleX: current.scaleX,
+    scaleY: current.scaleY,
+    skewX: current.skewX,
+    extrusionDepth: current.extrusionDepth,
+    extrusionColor: current.extrusionColor,
+    characterRhythm: current.characterRhythm,
+    curve: current.curve,
     ...patch,
   };
   const withoutCurrent = overrides.filter((item) => item.id !== layer.id);
@@ -347,7 +520,10 @@ export function applyPosterTextStyleToAll(
     .filter((layer) => Boolean(layer.textStyle))
     .map((layer) => ({
       id: layer.id,
+      fillMode: source.fillMode,
       fill: source.fill,
+      fillSecondary: source.fillSecondary,
+      fillTertiary: source.fillTertiary,
       strokeEnabled: source.strokeEnabled,
       strokeColor: source.strokeColor,
       strokeWidth: source.strokeWidth,
@@ -355,6 +531,13 @@ export function applyPosterTextStyleToAll(
       fontWeight: source.fontWeight,
       letterSpacing: source.letterSpacing,
       effect: source.effect,
+      scaleX: source.scaleX,
+      scaleY: source.scaleY,
+      skewX: source.skewX,
+      extrusionDepth: source.extrusionDepth,
+      extrusionColor: source.extrusionColor,
+      characterRhythm: source.characterRhythm,
+      curve: source.curve,
     }));
 }
 
