@@ -114,6 +114,314 @@ function getSharedTextPaint(
   };
 }
 
+type TextStylePatch = Partial<Omit<PosterTextStyleOverride, 'id'>>;
+
+interface PosterTextStyleControlsProps {
+  className?: string;
+  layers: PosterBaseLayer[];
+  style: ResolvedPosterTextStyle;
+  onPatch: (patch: TextStylePatch) => void;
+  onReset: () => void;
+  onApplyToAll: () => void;
+}
+
+function PosterTextStyleControls({
+  className = 'space-y-3',
+  layers,
+  style,
+  onPatch,
+  onReset,
+  onApplyToAll,
+}: PosterTextStyleControlsProps) {
+  return (
+    <div className={className}>
+      <div>
+        <div className="text-sm font-black">文字样式</div>
+        <div className="mt-0.5 text-xs text-slate-400">以下调整默认只作用于当前文字</div>
+      </div>
+
+      <div>
+        <div className="text-xs font-bold text-slate-300">艺术字</div>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {posterTextEffectPresets.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => onPatch(preset.patch)}
+              className={`min-h-10 rounded-lg border px-2 text-xs font-bold ${style.effect === preset.id ? 'border-orange-400 bg-orange-500 text-white' : 'border-white/20 text-slate-200 hover:bg-white/10'}`}
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-xs font-bold text-slate-300">
+          主颜色
+          <input
+            type="color"
+            value={colorInputValue(style.fill, '#FFFFFF')}
+            onChange={(event) => onPatch({ fill: event.target.value })}
+            className="mt-2 h-10 w-full rounded-lg border border-white/20 bg-transparent"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-300">
+          描边颜色
+          <input
+            type="color"
+            value={colorInputValue(style.strokeColor, '#111111')}
+            onChange={(event) => onPatch({ strokeColor: event.target.value })}
+            disabled={!style.strokeEnabled}
+            className="mt-2 h-10 w-full rounded-lg border border-white/20 bg-transparent disabled:opacity-35"
+          />
+        </label>
+      </div>
+
+      <label className="block text-xs font-bold text-slate-300">
+        填充方式
+        <select
+          value={style.fillMode}
+          onChange={(event) => onPatch({ fillMode: event.target.value as PosterTextFillMode })}
+          className="mt-2 min-h-10 w-full rounded-lg border border-white/20 bg-slate-800 px-2 text-sm text-white"
+        >
+          <option value="solid">单色</option>
+          <option value="gradient">三色渐变</option>
+          <option value="characters">逐字配色</option>
+        </select>
+      </label>
+
+      {style.fillMode !== 'solid' && (
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-xs font-bold text-slate-300">
+            第二颜色
+            <input
+              type="color"
+              value={colorInputValue(style.fillSecondary, '#FF861A')}
+              onChange={(event) => onPatch({ fillSecondary: event.target.value })}
+              className="mt-2 h-10 w-full rounded-lg border border-white/20 bg-transparent"
+            />
+          </label>
+          <label className="text-xs font-bold text-slate-300">
+            第三颜色
+            <input
+              type="color"
+              value={colorInputValue(style.fillTertiary, '#F23A20')}
+              onChange={(event) => onPatch({ fillTertiary: event.target.value })}
+              className="mt-2 h-10 w-full rounded-lg border border-white/20 bg-transparent"
+            />
+          </label>
+        </div>
+      )}
+
+      <label className="flex min-h-10 items-center justify-between rounded-lg border border-white/15 px-3 text-xs font-bold text-slate-300">
+        <span>开启描边</span>
+        <input
+          type="checkbox"
+          checked={style.strokeEnabled}
+          onChange={(event) => onPatch({ strokeEnabled: event.target.checked })}
+          className="h-5 w-5 accent-orange-500"
+        />
+      </label>
+
+      <label className={`block text-xs font-bold text-slate-300 ${style.strokeEnabled ? '' : 'opacity-40'}`}>
+        描边粗细 {style.strokeWidth}px
+        <input
+          type="range"
+          min="1"
+          max="24"
+          step="1"
+          value={style.strokeWidth}
+          onChange={(event) => onPatch({ strokeWidth: Number(event.target.value) })}
+          disabled={!style.strokeEnabled}
+          className="mt-2 w-full accent-orange-500"
+        />
+      </label>
+
+      <div>
+        <div className="text-xs font-bold text-slate-300">字体</div>
+        <select
+          value={style.fontFamily}
+          onChange={(event) => onPatch({ fontFamily: event.target.value })}
+          className="mt-2 hidden min-h-10 w-full rounded-lg border border-white/20 bg-slate-800 px-2 text-sm text-white lg:block"
+        >
+          {posterFontOptions.map((font) => <option key={font.name} value={font.value}>{font.name}</option>)}
+        </select>
+        <div className="mt-2 grid grid-cols-2 gap-2 lg:hidden">
+          {posterFontOptions.map((font) => {
+            const isActive = style.fontFamily === font.value;
+            return (
+              <button
+                key={font.name}
+                type="button"
+                aria-pressed={isActive}
+                onClick={() => onPatch({ fontFamily: font.value })}
+                className={`min-h-11 touch-manipulation rounded-lg border px-2 text-sm ${isActive ? 'border-orange-400 bg-orange-500 text-white' : 'border-white/20 text-slate-200 hover:bg-white/10'}`}
+                style={{ fontFamily: font.value }}
+              >
+                {font.name}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block text-xs font-bold text-slate-300">
+          字重
+          <select
+            value={style.fontWeight}
+            onChange={(event) => onPatch({ fontWeight: Number(event.target.value) })}
+            className="mt-2 min-h-10 w-full rounded-lg border border-white/20 bg-slate-800 px-2 text-sm text-white"
+          >
+            <option value="400">常规</option>
+            <option value="600">半粗</option>
+            <option value="800">粗体</option>
+            <option value="900">特粗</option>
+          </select>
+        </label>
+        <label className="block text-xs font-bold text-slate-300">
+          字间距 {style.letterSpacing}px
+          <input
+            type="range"
+            min="-4"
+            max="30"
+            step="1"
+            value={style.letterSpacing}
+            onChange={(event) => onPatch({ letterSpacing: Number(event.target.value) })}
+            className="mt-3 w-full accent-orange-500"
+          />
+        </label>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block text-xs font-bold text-slate-300">
+          横向拉伸 {style.scaleX.toFixed(2)}
+          <input
+            type="range"
+            min="0.6"
+            max="1.6"
+            step="0.02"
+            value={style.scaleX}
+            onChange={(event) => onPatch({ scaleX: Number(event.target.value) })}
+            className="mt-3 w-full accent-orange-500"
+          />
+        </label>
+        <label className="block text-xs font-bold text-slate-300">
+          纵向拉伸 {style.scaleY.toFixed(2)}
+          <input
+            type="range"
+            min="0.6"
+            max="1.4"
+            step="0.02"
+            value={style.scaleY}
+            onChange={(event) => onPatch({ scaleY: Number(event.target.value) })}
+            className="mt-3 w-full accent-orange-500"
+          />
+        </label>
+      </div>
+
+      <label className="block text-xs font-bold text-slate-300">
+        文字倾斜 {style.skewX}°
+        <input
+          type="range"
+          min="-20"
+          max="20"
+          step="1"
+          value={style.skewX}
+          onChange={(event) => onPatch({ skewX: Number(event.target.value) })}
+          className="mt-2 w-full accent-orange-500"
+        />
+      </label>
+
+      <div>
+        <div className="flex items-center justify-between text-xs font-bold text-slate-300">
+          <span>标题弧度</span>
+          <span>{style.curve > 0 ? `拱形 +${style.curve}` : style.curve < 0 ? `下弧 ${style.curve}` : '直线'}</span>
+        </div>
+        <input
+          type="range"
+          min="-160"
+          max="160"
+          step="4"
+          value={style.curve}
+          onChange={(event) => onPatch({ curve: Number(event.target.value) })}
+          className="mt-2 w-full accent-orange-500"
+        />
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          {([[-70, '下弧'], [0, '直线'], [70, '拱形']] as const).map(([curve, label]) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => onPatch({ curve })}
+              className={`min-h-9 rounded-lg border px-2 text-xs font-bold ${style.curve === curve ? 'border-orange-400 bg-orange-500 text-white' : 'border-white/20 text-slate-200 hover:bg-white/10'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-[1fr_84px] gap-2">
+        <label className="block text-xs font-bold text-slate-300">
+          立体厚度 {style.extrusionDepth}px
+          <input
+            type="range"
+            min="0"
+            max="24"
+            step="1"
+            value={style.extrusionDepth}
+            onChange={(event) => onPatch({ extrusionDepth: Number(event.target.value) })}
+            className="mt-3 w-full accent-orange-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-300">
+          立体颜色
+          <input
+            type="color"
+            value={colorInputValue(style.extrusionColor, '#111111')}
+            onChange={(event) => onPatch({ extrusionColor: event.target.value })}
+            disabled={style.extrusionDepth === 0}
+            className="mt-2 h-10 w-full rounded-lg border border-white/20 bg-transparent disabled:opacity-35"
+          />
+        </label>
+      </div>
+
+      <label className={`block text-xs font-bold text-slate-300 ${style.fillMode === 'characters' ? '' : 'opacity-40'}`}>
+        单字节奏 {style.characterRhythm}
+        <input
+          type="range"
+          min="0"
+          max="10"
+          step="1"
+          value={style.characterRhythm}
+          onChange={(event) => onPatch({ characterRhythm: Number(event.target.value) })}
+          disabled={style.fillMode !== 'characters'}
+          className="mt-2 w-full accent-orange-500"
+        />
+      </label>
+
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={onReset}
+          className="min-h-10 rounded-lg border border-white/20 px-2 text-xs font-bold hover:bg-white/10"
+        >
+          重置文字样式
+        </button>
+        <button
+          type="button"
+          onClick={onApplyToAll}
+          disabled={!layers.some((item) => item.textStyle)}
+          className="min-h-10 rounded-lg bg-orange-500 px-2 text-xs font-black text-white hover:bg-orange-600 disabled:opacity-45"
+        >
+          应用到全部文字
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function PosterFreeLayoutModal({
   isOpen,
   layers,
@@ -135,6 +443,7 @@ export default function PosterFreeLayoutModal({
   const [transforms, setTransforms] = useState<PosterLayerTransform[]>([]);
   const [textStyles, setTextStyles] = useState<PosterTextStyleOverride[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [mobileTextEditorLayerId, setMobileTextEditorLayerId] = useState<string | null>(null);
   const initialSnapshotRef = useRef('');
 
   useEffect(() => {
@@ -143,6 +452,7 @@ export default function PosterFreeLayoutModal({
     setTransforms(merged);
     setTextStyles(initialTextStyles);
     setSelectedId(null);
+    setMobileTextEditorLayerId(null);
     initialSnapshotRef.current = JSON.stringify({ transforms: merged, textStyles: initialTextStyles });
   }, [isOpen, layers, initialTransforms, initialTextStyles]);
 
@@ -190,6 +500,12 @@ export default function PosterFreeLayoutModal({
   const selectedTextStyle = selectedLayer?.textStyle
     ? resolvePosterTextStyle(selectedLayer, textStyles)
     : null;
+  const mobileTextEditorLayer = mobileTextEditorLayerId
+    ? layers.find((layer) => layer.id === mobileTextEditorLayerId && layer.textStyle) ?? null
+    : null;
+  const mobileTextEditorStyle = mobileTextEditorLayer
+    ? resolvePosterTextStyle(mobileTextEditorLayer, textStyles)
+    : null;
   const dirty = JSON.stringify({ transforms, textStyles }) !== initialSnapshotRef.current;
 
   const updateTransform = (id: string, update: (current: PosterLayerTransform) => PosterLayerTransform) => {
@@ -207,6 +523,24 @@ export default function PosterFreeLayoutModal({
     setTextStyles((current) => updatePosterTextStyleOverride(current, selectedLayer, patch));
   };
 
+  const updateLayerTextStyle = (
+    layer: PosterBaseLayer,
+    patch: TextStylePatch
+  ) => {
+    if (!layer.textStyle) return;
+    setTextStyles((current) => updatePosterTextStyleOverride(current, layer, patch));
+  };
+
+  const isMobileViewport = () => typeof window !== 'undefined'
+    && window.matchMedia('(max-width: 1023px)').matches;
+
+  const openMobileTextEditor = (layerId: string) => {
+    const layer = layers.find((item) => item.id === layerId);
+    if (!layer?.textStyle || !isMobileViewport()) return;
+    setSelectedId(layerId);
+    setMobileTextEditorLayerId(layerId);
+  };
+
   const requestClose = () => {
     if (dirty && !window.confirm('当前自由布局尚未应用，确定关闭吗？')) return;
     onClose();
@@ -216,6 +550,7 @@ export default function PosterFreeLayoutModal({
     gestureRef.current = null;
     pointersRef.current.clear();
     setSelectedId(null);
+    setMobileTextEditorLayerId(null);
   };
 
   const getPanelPointerSample = (event: PointerEvent<HTMLElement>): PosterPointerSample => ({
@@ -360,6 +695,8 @@ export default function PosterFreeLayoutModal({
   const endGesture = (event: PointerEvent<HTMLElement>) => {
     const gesture = gestureRef.current;
     if (!gesture || (gesture.mode !== 'pinch' && gesture.pointerId !== event.pointerId)) return;
+    const tapDistance = Math.hypot(event.clientX - gesture.startClientX, event.clientY - gesture.startClientY);
+    const shouldOpenMobileTextEditor = gesture.mode === 'move' && tapDistance < 8;
     gestureRef.current = null;
     if (gesture.mode === 'pinch') {
       pointersRef.current.clear();
@@ -369,6 +706,9 @@ export default function PosterFreeLayoutModal({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    if (shouldOpenMobileTextEditor) {
+      openMobileTextEditor(gesture.layerId);
+    }
   };
 
   const resetLayout = () => {
@@ -376,6 +716,7 @@ export default function PosterFreeLayoutModal({
     const automatic = mergePosterLayerTransforms(layers, null);
     setTransforms(automatic);
     setSelectedId(null);
+    setMobileTextEditorLayerId(null);
     onReset();
   };
 
@@ -414,7 +755,7 @@ export default function PosterFreeLayoutModal({
               const textStyle = layer.textStyle
                 ? resolvePosterTextStyle(layer, textStyles)
                 : null;
-              const textGlyphs = layer.text && textStyle?.fillMode === 'characters'
+              const textGlyphs = layer.text && textStyle
                 ? buildPosterTextGlyphs(layer.text, textStyle)
                 : null;
               const textPaintLayers = textStyle && textGlyphs
@@ -489,11 +830,15 @@ export default function PosterFreeLayoutModal({
                                       style={paintLayer.role === 'face'
                                         ? {
                                             color: glyph.fill,
-                                            WebkitTextFillColor: 'transparent',
+                                            WebkitTextFillColor: textStyle.fillMode === 'solid' && !textStyle.gradient ? glyph.fill : 'transparent',
                                             WebkitTextStroke: '0 transparent',
-                                            backgroundImage: `linear-gradient(180deg, ${glyph.gradient.join(', ')})`,
-                                            backgroundClip: 'text',
-                                            WebkitBackgroundClip: 'text',
+                                            backgroundImage: textStyle.fillMode === 'characters'
+                                              ? `linear-gradient(180deg, ${glyph.gradient.join(', ')})`
+                                              : textStyle.gradient
+                                                ? `linear-gradient(180deg, ${textStyle.gradient.join(', ')})`
+                                                : undefined,
+                                            backgroundClip: textStyle.fillMode === 'characters' || textStyle.gradient ? 'text' : undefined,
+                                            WebkitBackgroundClip: textStyle.fillMode === 'characters' || textStyle.gradient ? 'text' : undefined,
                                           }
                                         : {
                                             color: paintLayer.fill,
@@ -581,7 +926,18 @@ export default function PosterFreeLayoutModal({
                 <input type="range" min="0" max="359" step="1" value={selected.rotation} onChange={(event) => updateTransform(selected.id, (current) => ({ ...current, rotation: Number(event.target.value) }))} className="mt-2 w-full accent-amber-500" />
               </label>
               {selectedTextStyle && (
-                <div className="space-y-3 border-t border-white/10 pt-4">
+                <>
+                  <div className="border-t border-white/10 pt-4 lg:hidden">
+                    <button
+                      type="button"
+                      onClick={() => setMobileTextEditorLayerId(selectedLayer.id)}
+                      className="min-h-11 w-full rounded-lg bg-orange-500 px-3 text-sm font-black text-white hover:bg-orange-600"
+                    >
+                      编辑文字样式
+                    </button>
+                    <div className="mt-2 text-xs leading-5 text-slate-400">轻点文字也会直接打开全屏文字样式面板。</div>
+                  </div>
+                  <div className="hidden space-y-3 border-t border-white/10 pt-4 lg:block">
                   <div>
                     <div className="text-sm font-black">文字样式</div>
                     <div className="mt-0.5 text-xs text-slate-400">以下调整默认只作用于当前文字</div>
@@ -864,7 +1220,8 @@ export default function PosterFreeLayoutModal({
                       应用到全部文字
                     </button>
                   </div>
-                </div>
+                  </div>
+                </>
               )}
               <div>
                 <div className="text-xs font-bold text-slate-300">层级</div>
@@ -883,6 +1240,36 @@ export default function PosterFreeLayoutModal({
           )}
         </aside>
       </div>
+
+      {mobileTextEditorLayer && mobileTextEditorStyle && (
+        <div className="fixed inset-0 z-[90] flex flex-col bg-slate-950 text-white lg:hidden" role="dialog" aria-modal="true" aria-labelledby="poster-mobile-text-editor-title">
+          <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-slate-900 px-4 py-3">
+            <div className="min-w-0">
+              <h3 id="poster-mobile-text-editor-title" className="truncate text-base font-black">
+                文字样式 · {layerNames[mobileTextEditorLayer.kind]}
+              </h3>
+              <p className="mt-0.5 truncate text-xs text-slate-400">{mobileTextEditorLayer.text}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileTextEditorLayerId(null)}
+              className="min-h-10 shrink-0 rounded-lg border border-white/20 px-4 text-sm font-black text-slate-200"
+            >
+              完成
+            </button>
+          </header>
+          <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-y-contain px-4 py-4">
+            <PosterTextStyleControls
+              className="space-y-4 pb-8"
+              layers={layers}
+              style={mobileTextEditorStyle}
+              onPatch={(patch) => updateLayerTextStyle(mobileTextEditorLayer, patch)}
+              onReset={() => setTextStyles((current) => current.filter((style) => style.id !== mobileTextEditorLayer.id))}
+              onApplyToAll={() => setTextStyles(applyPosterTextStyleToAll(layers, mobileTextEditorStyle))}
+            />
+          </div>
+        </div>
+      )}
 
       <footer className="flex shrink-0 justify-end gap-2 border-t border-white/10 bg-slate-900 px-3 py-3 sm:px-5">
         <button type="button" onClick={requestClose} className="min-h-11 rounded-lg border border-white/20 px-5 text-sm font-black text-slate-200">取消</button>
