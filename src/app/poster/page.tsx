@@ -15,12 +15,16 @@ import Link from 'next/link';
 import PosterFreeLayoutModal from '../../components/PosterFreeLayoutModal';
 import WatermarkRemovalModal from '../../components/WatermarkRemovalModal';
 import {
-  BackgroundRemovalMode,
   BackgroundRemovalMethod,
   loadImage,
   processPosterImage,
   readFileAsDataUrl,
+  type BackgroundRemovalMode,
 } from '../../utils/posterProcessing';
+import {
+  createDefaultPosterSettings,
+  type PosterSettings,
+} from '../../utils/posterSettings';
 import {
   POSTER_HEIGHT,
   POSTER_WIDTH,
@@ -52,40 +56,6 @@ interface PosterItem {
   backgroundMethod: BackgroundRemovalMethod;
   error?: string;
 }
-
-interface PosterSettings {
-  title: string;
-  subtitle: string;
-  bottomTitle: string;
-  fixedText: string;
-  backgroundStart: string;
-  backgroundEnd: string;
-  useGradientBackground: boolean;
-  layoutMode: PosterLayoutMode;
-  backgroundRemovalMode: BackgroundRemovalMode;
-  pixelate: boolean;
-  addOutline: boolean;
-  primaryText: string;
-  secondaryText: string;
-  outlineColor: string;
-}
-
-const defaultSettings: PosterSettings = {
-  title: '',
-  subtitle: '',
-  bottomTitle: '',
-  fixedText: '图纸在粉丝群',
-  backgroundStart: '#58C7C2',
-  backgroundEnd: '#F4F7F5',
-  useGradientBackground: true,
-  layoutMode: 'auto',
-  backgroundRemovalMode: 'local',
-  pixelate: true,
-  addOutline: true,
-  primaryText: '#FFFFFF',
-  secondaryText: '#342217',
-  outlineColor: '#24160F',
-};
 
 const legacyBackgroundColors = [
   ['#F7F0DF', '#FFFDF6'],
@@ -342,7 +312,7 @@ export default function PosterPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [items, setItems] = useState<PosterItem[]>([]);
   const [useSourceNames, setUseSourceNames] = useState(true);
-  const [settings, setSettings] = useState<PosterSettings>(defaultSettings);
+  const [settings, setSettings] = useState<PosterSettings>(() => createDefaultPosterSettings());
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [watermarkItemId, setWatermarkItemId] = useState<string | null>(null);

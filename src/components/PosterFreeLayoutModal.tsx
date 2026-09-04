@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { CSSProperties, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, MouseEvent, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   POSTER_HEIGHT,
   POSTER_WIDTH,
@@ -22,6 +22,11 @@ import {
   type PosterTextFillMode,
   type PosterTextStyleOverride,
 } from '../utils/posterLayout';
+import {
+  canStartPosterLayerGesture,
+  shouldSuppressPosterPanelActivation,
+  type PosterPointerSample,
+} from '../utils/posterInteraction';
 
 interface PosterFreeLayoutModalProps {
   isOpen: boolean;
@@ -122,8 +127,11 @@ export default function PosterFreeLayoutModal({
   onReset,
 }: PosterFreeLayoutModalProps) {
   const posterRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
   const gestureRef = useRef<GestureState | null>(null);
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const panelPointerStartRef = useRef<{ pointerId: number; sample: PosterPointerSample } | null>(null);
+  const suppressPanelClickUntilRef = useRef(0);
   const [transforms, setTransforms] = useState<PosterLayerTransform[]>([]);
   const [textStyles, setTextStyles] = useState<PosterTextStyleOverride[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -134,7 +142,7 @@ export default function PosterFreeLayoutModal({
     const merged = mergePosterLayerTransforms(layers, initialTransforms);
     setTransforms(merged);
     setTextStyles(initialTextStyles);
-    setSelectedId(merged[0]?.id ?? null);
+    setSelectedId(null);
     initialSnapshotRef.current = JSON.stringify({ transforms: merged, textStyles: initialTextStyles });
   }, [isOpen, layers, initialTransforms, initialTextStyles]);
 
@@ -204,6 +212,54 @@ export default function PosterFreeLayoutModal({
     onClose();
   };
 
+  const clearSelection = () => {
+    gestureRef.current = null;
+    pointersRef.current.clear();
+    setSelectedId(null);
+  };
+
+  const getPanelPointerSample = (event: PointerEvent<HTMLElement>): PosterPointerSample => ({
+    x: event.clientX,
+    y: event.clientY,
+    scrollTop: panelRef.current?.scrollTop ?? 0,
+  });
+
+  const handlePanelPointerDownCapture = (event: PointerEvent<HTMLElement>) => {
+    if (event.pointerType !== 'touch') return;
+    panelPointerStartRef.current = {
+      pointerId: event.pointerId,
+      sample: getPanelPointerSample(event),
+    };
+  };
+
+  const recordPanelScrollIntent = (event: PointerEvent<HTMLElement>) => {
+    const start = panelPointerStartRef.current;
+    if (!start || start.pointerId !== event.pointerId) return;
+    if (shouldSuppressPosterPanelActivation(start.sample, getPanelPointerSample(event))) {
+      suppressPanelClickUntilRef.current = Date.now() + 350;
+    }
+  };
+
+  const finishPanelPointer = (event: PointerEvent<HTMLElement>) => {
+    recordPanelScrollIntent(event);
+    if (panelPointerStartRef.current?.pointerId === event.pointerId) {
+      panelPointerStartRef.current = null;
+    }
+  };
+
+  const cancelPanelPointer = (event: PointerEvent<HTMLElement>) => {
+    if (panelPointerStartRef.current?.pointerId !== event.pointerId) return;
+    suppressPanelClickUntilRef.current = Date.now() + 350;
+    panelPointerStartRef.current = null;
+  };
+
+  const suppressAccidentalPanelClick = (event: MouseEvent<HTMLElement>) => {
+    if (Date.now() >= suppressPanelClickUntilRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    suppressPanelClickUntilRef.current = 0;
+  };
+
   const beginGesture = (
     mode: GestureMode,
     layerId: string,
@@ -211,7 +267,7 @@ export default function PosterFreeLayoutModal({
   ) => {
     const transform = transforms.find((item) => item.id === layerId);
     const poster = posterRef.current;
-    if (!transform || !poster) return;
+    if (!transform || !poster || !canStartPosterLayerGesture(selectedId, layerId)) return;
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -319,7 +375,7 @@ export default function PosterFreeLayoutModal({
     if (!window.confirm('确定恢复自动布局吗？自由调整的位置、大小、旋转和层级将被清除。')) return;
     const automatic = mergePosterLayerTransforms(layers, null);
     setTransforms(automatic);
-    setSelectedId(automatic[0]?.id ?? null);
+    setSelectedId(null);
     onReset();
   };
 
@@ -330,7 +386,7 @@ export default function PosterFreeLayoutModal({
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-slate-900 px-3 py-3 text-white sm:px-5">
         <div>
           <h2 id="poster-free-layout-title" className="text-base font-black sm:text-lg">自由布局编辑</h2>
-          <p className="text-xs text-slate-400">拖动元素；角落缩放，顶部圆点旋转。支持鼠标与触控。</p>
+          <p className="text-xs text-slate-400">选中后锁定当前元素；点画布空白完成，再选择其他元素。</p>
         </div>
         <div className="flex items-center gap-2">
           <button type="button" onClick={resetLayout} className="min-h-10 rounded-lg border border-white/20 px-3 text-sm font-bold text-slate-200 hover:bg-white/10">恢复自动布局</button>
@@ -350,10 +406,11 @@ export default function PosterFreeLayoutModal({
                 ? `linear-gradient(90deg, ${backgroundStart}, ${backgroundEnd})`
                 : backgroundStart,
             }}
-            onPointerDown={() => setSelectedId(null)}
+            onPointerDown={clearSelection}
           >
             {resolved.map(({ layer, transform }) => {
               const isSelected = transform.id === selectedId;
+              const isLocked = selectedId !== null && !isSelected;
               const textStyle = layer.textStyle
                 ? resolvePosterTextStyle(layer, textStyles)
                 : null;
@@ -366,7 +423,7 @@ export default function PosterFreeLayoutModal({
               return (
                 <div
                   key={layer.id}
-                  className={`absolute touch-none select-none ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-transparent' : ''}`}
+                  className={`absolute touch-none select-none ${isLocked ? 'pointer-events-none' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-transparent' : ''}`}
                   style={{
                     left: `${(transform.x / POSTER_WIDTH) * 100}%`,
                     top: `${(transform.y / POSTER_HEIGHT) * 100}%`,
@@ -491,12 +548,29 @@ export default function PosterFreeLayoutModal({
           </div>
         </div>
 
-        <aside className="shrink-0 border-t border-white/10 bg-slate-900 p-3 text-white lg:w-80 lg:border-l lg:border-t-0 lg:p-5">
+        <aside
+          ref={panelRef}
+          className="max-h-[55dvh] shrink-0 touch-pan-y overflow-y-auto overscroll-y-contain border-t border-white/10 bg-slate-900 p-3 pb-8 text-white lg:max-h-none lg:w-80 lg:border-l lg:border-t-0 lg:p-5"
+          onPointerDownCapture={handlePanelPointerDownCapture}
+          onPointerMoveCapture={recordPanelScrollIntent}
+          onPointerUpCapture={finishPanelPointer}
+          onPointerCancelCapture={cancelPanelPointer}
+          onClickCapture={suppressAccidentalPanelClick}
+        >
           {selected && selectedLayer ? (
             <div className="space-y-4">
-              <div>
-                <div className="text-xs font-bold text-slate-400">当前元素</div>
-                <div className="mt-1 font-black">{layerNames[selectedLayer.kind]}{selectedLayer.text ? ` · ${selectedLayer.text}` : ''}</div>
+              <div className="sticky -top-3 z-30 -mx-3 -mt-3 flex items-center justify-between gap-3 border-b border-white/10 bg-slate-900/95 px-3 py-3 backdrop-blur lg:static lg:mx-0 lg:mt-0 lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-slate-400">当前元素 · 已锁定</div>
+                  <div className="mt-1 truncate font-black">{layerNames[selectedLayer.kind]}{selectedLayer.text ? ` · ${selectedLayer.text}` : ''}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  className="min-h-10 shrink-0 touch-manipulation rounded-lg border border-amber-400/60 px-3 text-xs font-black text-amber-300 hover:bg-amber-400/10"
+                >
+                  完成当前元素
+                </button>
               </div>
               <label className="block text-xs font-bold text-slate-300">
                 大小 {selected.scale.toFixed(2)} 倍
@@ -611,16 +685,33 @@ export default function PosterFreeLayoutModal({
                     />
                   </label>
 
-                  <label className="block text-xs font-bold text-slate-300">
-                    字体
+                  <div>
+                    <div className="text-xs font-bold text-slate-300">字体</div>
                     <select
                       value={selectedTextStyle.fontFamily}
                       onChange={(event) => updateSelectedTextStyle({ fontFamily: event.target.value })}
-                      className="mt-2 min-h-10 w-full rounded-lg border border-white/20 bg-slate-800 px-2 text-sm text-white"
+                      className="mt-2 hidden min-h-10 w-full rounded-lg border border-white/20 bg-slate-800 px-2 text-sm text-white lg:block"
                     >
                       {posterFontOptions.map((font) => <option key={font.name} value={font.value}>{font.name}</option>)}
                     </select>
-                  </label>
+                    <div className="mt-2 grid grid-cols-2 gap-2 lg:hidden">
+                      {posterFontOptions.map((font) => {
+                        const isActive = selectedTextStyle.fontFamily === font.value;
+                        return (
+                          <button
+                            key={font.name}
+                            type="button"
+                            aria-pressed={isActive}
+                            onClick={() => updateSelectedTextStyle({ fontFamily: font.value })}
+                            className={`min-h-11 touch-manipulation rounded-lg border px-2 text-sm ${isActive ? 'border-orange-400 bg-orange-500 text-white' : 'border-white/20 text-slate-200 hover:bg-white/10'}`}
+                            style={{ fontFamily: font.value }}
+                          >
+                            {font.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
 
                   <div className="grid grid-cols-2 gap-2">
                     <label className="block text-xs font-bold text-slate-300">
